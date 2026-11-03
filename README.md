@@ -452,4 +452,3 @@ gestureflight-ai/
 
 MIT. Bundled MediaPipe assets remain Apache-2.0 — see *3D asset credits*.
 
-<!-- auto-deploy verification -->
