@@ -54,7 +54,7 @@ function resolveChrome() {
   if (process.env.CHROME_PATH) return process.env.CHROME_PATH;
   try {
     const p = puppeteer.executablePath();
-    if (existsSync(p)) return p;
+    if (typeof p === "string" && existsSync(p)) return p;
   } catch {
     /* fall through to the system browser */
   }
@@ -170,7 +170,10 @@ async function run() {
   try {
     /* ───────── boot ───────── */
     section("Application boot");
-    await page.goto(base, { waitUntil: "networkidle2", timeout: 60_000 });
+    // `domcontentloaded` rather than `networkidle2`: over a real network the
+    // 23 MB of MediaPipe assets keep the connection busy, so network-idle never
+    // settles. The readiness flag below is the real signal.
+    await page.goto(base, { waitUntil: "domcontentloaded", timeout: 120_000 });
     await page.waitForFunction(() => window.__gestureflight?.ready === true, { timeout: 30_000 });
     check("page loads and the app initialises", true);
 
