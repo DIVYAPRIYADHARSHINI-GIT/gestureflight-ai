@@ -393,6 +393,172 @@ input[type="range"]::-moz-range-thumb {
   color: #cdf5dd; line-height: 1.55; margin: 0 0 16px;
 }
 
+/* ═══════════════════════════════════════════════════════════════
+   Upload / Engine Explorer / Blueprint — added by the upgrade.
+   Reuses the existing tokens so the aerospace theme is unchanged.
+   ═══════════════════════════════════════════════════════════════ */
+
+.panel__subtitle {
+  margin: 14px 0 8px; font-size: 10px; letter-spacing: 1.1px;
+  text-transform: uppercase; color: var(--ink-mute); font-weight: 700;
+}
+
+/* ───────────── dropzone ───────────── */
+.dropzone {
+  border: 1px dashed var(--line-strong); border-radius: var(--radius-sm);
+  background: rgba(8, 16, 30, 0.5); padding: 16px 12px; cursor: pointer;
+  display: flex; flex-direction: column; align-items: center; gap: 4px;
+  text-align: center; transition: all .18s;
+}
+.dropzone:hover, .dropzone:focus-visible { border-color: var(--cyan); background: rgba(56, 225, 240, 0.08); }
+.dropzone.is-over { border-color: var(--cyan); background: rgba(56, 225, 240, 0.16); transform: scale(1.01); }
+.dropzone__icon { font-size: 20px; color: var(--cyan); line-height: 1; }
+.dropzone__title { font-size: 13px; }
+.dropzone__hint { font-size: 11px; color: var(--ink-soft); }
+.dropzone__formats { font-size: 9.5px; font-family: var(--mono); color: var(--ink-mute); letter-spacing: .3px; }
+.dropzone__privacy { font-size: 9.5px; color: var(--green); margin-top: 3px; }
+
+.upload__error {
+  margin: 10px 0 0; font-size: 11px; line-height: 1.5; color: #ffd0d7;
+  background: rgba(255, 107, 129, 0.12); border: 1px solid rgba(255, 107, 129, 0.35);
+  border-radius: 8px; padding: 9px;
+}
+
+.upload__status {
+  margin-top: 10px; padding: 10px; border-radius: var(--radius-sm);
+  border: 1px solid var(--line); background: rgba(8, 16, 30, 0.6);
+}
+.upload__head { display: flex; flex-direction: column; gap: 2px; margin-bottom: 8px; }
+.upload__name { font-size: 12px; font-weight: 600; word-break: break-all; }
+.upload__meta { font-size: 10px; font-family: var(--mono); color: var(--ink-mute); }
+.upload__stage { display: flex; justify-content: space-between; font-size: 10.5px; color: var(--ink-soft); margin-bottom: 5px; }
+.upload__stage b { color: var(--cyan); font-family: var(--mono); font-weight: 500; }
+.upload__bar { height: 5px; border-radius: 99px; background: rgba(255,255,255,.08); overflow: hidden; }
+.upload__fill { height: 100%; border-radius: 99px; background: linear-gradient(90deg, var(--teal), var(--cyan)); transition: width .18s; }
+.upload__detail { display: block; margin-top: 6px; font-size: 10px; color: var(--ink-mute); }
+
+/* ───────────── library ───────────── */
+.library { display: flex; flex-direction: column; gap: 5px; }
+.library__row {
+  display: flex; align-items: stretch; gap: 4px;
+  border: 1px solid transparent; border-radius: 8px;
+  background: rgba(8, 16, 30, 0.5); transition: all .15s;
+}
+.library__row:hover { border-color: var(--line-strong); }
+.library__row.is-active { border-color: var(--cyan); background: rgba(56, 225, 240, 0.1); }
+.library__main {
+  flex: 1; min-width: 0; text-align: left; border: 0; background: transparent;
+  padding: 8px 10px; cursor: pointer; display: flex; flex-direction: column; gap: 2px;
+}
+.library__name { font-size: 11.5px; color: var(--ink); word-break: break-all; }
+.library__meta { font-size: 9.5px; font-family: var(--mono); color: var(--ink-mute); }
+.library__remove {
+  flex: none; width: 30px; border: 0; background: transparent;
+  color: var(--ink-mute); cursor: pointer; border-radius: 0 8px 8px 0; font-size: 12px;
+}
+.library__remove:hover { color: var(--rose); background: rgba(255,107,129,.12); }
+
+/* ───────────── modes + quality ───────────── */
+.modes, .quality { display: flex; flex-wrap: wrap; gap: 4px; }
+.modes button, .quality button {
+  flex: 1 1 auto; border: 1px solid var(--line); background: rgba(8,16,30,.55);
+  color: var(--ink-soft); border-radius: 8px; padding: 7px 9px; font-size: 11px;
+  cursor: pointer; transition: all .16s; min-height: 32px;
+}
+.modes button:hover:not(:disabled), .quality button:hover { border-color: var(--line-strong); color: var(--ink); }
+.modes button.is-active, .quality button.is-active {
+  border-color: var(--cyan); color: var(--cyan); background: rgba(56,225,240,.12);
+}
+.modes button:disabled { opacity: .35; cursor: not-allowed; }
+
+/* ───────────── provenance badges (§2/§9 honesty) ───────────── */
+.provenance {
+  margin: 0 0 10px; font-size: 10.5px; line-height: 1.5; padding: 7px 9px;
+  border-radius: 8px; border: 1px solid var(--line); color: var(--ink-soft);
+  background: rgba(8,16,30,.55);
+}
+.provenance[data-source="imported"] { border-color: rgba(74,222,128,.4); background: rgba(74,222,128,.08); color: #cdf5dd; }
+.provenance[data-source="reconstructed"] { border-color: rgba(243,178,60,.4); background: rgba(243,178,60,.08); color: #f8e3bb; }
+.provenance[data-source="illustrative"] { border-color: rgba(56,225,240,.3); background: rgba(56,225,240,.07); color: #cdeef5; }
+
+.chip--source { color: var(--amber); border-color: rgba(243,178,60,.42); }
+.chip--mode { color: var(--teal); border-color: rgba(25,185,167,.45); }
+
+/* ───────────── engine hierarchy tree ───────────── */
+.tree { display: flex; flex-direction: column; gap: 8px; }
+.tree__group { display: flex; flex-direction: column; gap: 3px; }
+.tree__label {
+  font-size: 9.5px; letter-spacing: .8px; text-transform: uppercase;
+  color: var(--teal); padding-left: 2px;
+}
+.tree__row { display: flex; align-items: stretch; gap: 3px; }
+.tree__main {
+  flex: 1; min-width: 0; text-align: left; border: 1px solid transparent;
+  background: rgba(8,16,30,.5); border-radius: 7px; padding: 6px 9px;
+  font-size: 11px; color: var(--ink-soft); cursor: pointer; transition: all .15s;
+}
+.tree__main:hover { border-color: var(--line-strong); color: var(--ink); }
+.tree__main.is-active { border-color: var(--cyan); color: var(--cyan); background: rgba(56,225,240,.1); }
+.tree__eye {
+  flex: none; width: 28px; border: 1px solid transparent; border-radius: 7px;
+  background: rgba(8,16,30,.5); color: var(--ink-mute); cursor: pointer; font-size: 11px;
+}
+.tree__eye:hover { border-color: var(--line-strong); color: var(--ink); }
+.tree__eye[data-hidden="true"] { color: var(--rose); }
+
+/* ───────────── blueprint viewer ───────────── */
+.blueprint { margin-top: 14px; }
+.blueprint__stage {
+  position: relative; height: 210px; overflow: hidden; cursor: grab;
+  border: 1px solid var(--line); border-radius: var(--radius-sm);
+  background: #0b1018;
+  display: flex; align-items: center; justify-content: center;
+}
+.blueprint__stage:active { cursor: grabbing; }
+.blueprint__holder { transform-origin: center center; transition: transform .05s linear; }
+.blueprint__canvas { max-width: 100%; max-height: 208px; display: block; }
+.blueprint__controls { display: flex; align-items: center; gap: 6px; margin-top: 8px; }
+.blueprint__page { font-size: 10.5px; font-family: var(--mono); color: var(--ink-mute); flex: 1; text-align: center; }
+.blueprint__view { display: flex; align-items: center; gap: 8px; margin-top: 10px; }
+.blueprint__viewlabel { font-size: 11px; color: var(--ink-mute); }
+.blueprint__select {
+  flex: 1; background: rgba(8,16,30,.7); color: var(--ink);
+  border: 1px solid var(--line); border-radius: 7px; padding: 5px 7px; font-size: 11px;
+}
+.blueprint__reason { margin: 6px 0 0; font-size: 10px; line-height: 1.5; color: var(--ink-mute); }
+
+/* ───────────── assisted reconstruction ───────────── */
+.recon { margin-top: 14px; }
+.recon__honesty {
+  margin: 0 0 10px; font-size: 10.5px; line-height: 1.55; color: #f8e3bb;
+  border: 1px solid rgba(243,178,60,.35); background: rgba(243,178,60,.08);
+  border-radius: 8px; padding: 9px;
+}
+.recon__grid { display: grid; grid-template-columns: 1fr; gap: 7px; }
+.recon__field { display: flex; flex-direction: column; gap: 3px; font-size: 10.5px; color: var(--ink-mute); }
+.recon__input {
+  background: rgba(8,16,30,.7); color: var(--ink); border: 1px solid var(--line);
+  border-radius: 7px; padding: 6px 8px; font-size: 11.5px; font-family: var(--mono);
+}
+.recon__input:focus { border-color: var(--cyan); outline: none; }
+.recon__error {
+  margin: 8px 0 0; font-size: 10.5px; line-height: 1.5; color: #ffd0d7;
+  background: rgba(255,107,129,.12); border: 1px solid rgba(255,107,129,.35);
+  border-radius: 8px; padding: 8px;
+}
+
+/* ───────────── stage-wide drop target ───────────── */
+.stage__drop {
+  position: absolute; inset: 0; z-index: 9;
+  display: flex; align-items: center; justify-content: center;
+  background: rgba(5, 9, 18, 0.8); border: 2px dashed var(--cyan);
+  border-radius: var(--radius); backdrop-filter: blur(3px);
+}
+.stage__drop[hidden] { display: none; }
+.stage__dropinner { text-align: center; display: flex; flex-direction: column; gap: 6px; }
+.stage__dropinner span { font-size: 15px; color: var(--cyan); }
+.stage__dropinner small { font-size: 11px; color: var(--ink-mute); }
+
 /* ───────────── responsive ───────────── */
 @media (max-width: 1240px) {
   .layout { grid-template-columns: 286px 1fr 286px; }

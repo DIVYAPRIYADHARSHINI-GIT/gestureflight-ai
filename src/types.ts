@@ -14,7 +14,11 @@ export type GestureId =
   | "peace"
   | "thumbs_up"
   | "rotate"
-  | "two_hand_zoom";
+  | "two_hand_zoom"
+  // Added by the upload/engine upgrade — see GestureController for arbitration.
+  | "pinch_drag"
+  | "swipe_left"
+  | "swipe_right";
 
 export interface GestureMeta {
   id: GestureId;

@@ -27,3 +27,6 @@ dist-ssr
 tests/fixtures/poses.json
 .vercel
 .env*
+
+# scratch generators used while building fixtures
+tools-*.mjs

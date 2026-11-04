@@ -45,6 +45,23 @@
       <main class="layout">
         <!-- LEFT CONTROL PANEL -->
         <aside class="panel panel--left glass" aria-label="Controls">
+          <!-- Upload Aircraft Design (added by the upload/engine upgrade) -->
+          <section class="panel__block" id="upload-block">
+            <h2 class="panel__title">Upload Aircraft Design</h2>
+            <div id="upload-mount"></div>
+          </section>
+
+          <section class="panel__block">
+            <h2 class="panel__title">Exploration Mode</h2>
+            <div class="modes" id="mode-rail"></div>
+            <p class="panel__hint" id="mode-hint"></p>
+            <label class="slider">
+              <span class="slider__label">Render quality</span>
+              <div class="quality" id="quality-rail"></div>
+            </label>
+            <p class="panel__hint" id="quality-hint"></p>
+          </section>
+
           <section class="panel__block">
             <h2 class="panel__title">Selected Aircraft</h2>
             <p class="aircraft__name" id="aircraft-name">—</p>
@@ -147,6 +164,14 @@
           <div class="stage__hud stage__hud--tl">
             <span class="chip" id="hud-mode">Gestures: on</span>
             <span class="chip" id="hud-explode">Assembled</span>
+            <span class="chip chip--mode" id="hud-exploration">Aircraft Exterior</span>
+            <span class="chip chip--source" id="hud-source">Illustrative geometry</span>
+          </div>
+          <div class="stage__drop" id="stage-drop" hidden>
+            <div class="stage__dropinner">
+              <span>Drop your aircraft design here</span>
+              <small>STEP · STL · OBJ · GLB · GLTF · PDF · PNG · JPG — processed locally</small>
+            </div>
           </div>
 
           <div class="stage__hud stage__hud--tr">
@@ -193,6 +218,44 @@
             <h2 class="panel__title">Components</h2>
             <p class="panel__hint" id="component-count">—</p>
             <ul class="complist" id="component-list"></ul>
+          </section>
+
+          <!-- Engine Explorer (added by the upload/engine upgrade) -->
+          <section class="panel__block" id="engine-block">
+            <h2 class="panel__title">Engine Explorer</h2>
+            <p class="provenance" id="engine-provenance"></p>
+            <div class="btnrow">
+              <button class="btn btn--primary" id="btn-engine-enter">Enter Engine</button>
+              <button class="btn" id="btn-engine-exit" disabled>Back to Aircraft</button>
+            </div>
+            <div id="engine-controls" hidden>
+              <label class="slider">
+                <span class="slider__label">Engine separation <b id="val-engine-explode">0%</b></span>
+                <input type="range" id="engine-explode-slider" min="0" max="100" value="0" />
+              </label>
+              <div class="btnrow">
+                <button class="btn" id="btn-engine-explode">Explode</button>
+                <button class="btn" id="btn-engine-assemble">Assemble</button>
+              </div>
+              <label class="toggle">
+                <input type="checkbox" id="toggle-cutaway" />
+                <span>Cutaway (hide outer casings)</span>
+              </label>
+              <label class="toggle">
+                <input type="checkbox" id="toggle-airflow" checked />
+                <span>Airflow visualisation</span>
+              </label>
+              <p class="disclaimer" id="airflow-note">
+                Airflow arrows are an illustrative teaching diagram of the
+                intake → fan → compressor → combustor → turbine → exhaust path. They are
+                not a CFD or engine simulation.
+              </p>
+              <h3 class="panel__subtitle">Engine component hierarchy</h3>
+              <div class="tree" id="engine-tree"></div>
+              <div class="btnrow">
+                <button class="btn btn--ghost" id="btn-engine-showall">Show all parts</button>
+              </div>
+            </div>
           </section>
         </aside>
       </main>

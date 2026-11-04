@@ -9,9 +9,9 @@
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
     "test:fixtures": "vite-node tests/fixtures/generate.ts",
-    "test:unit": "vite-node tests/gestures.test.ts && vite-node tests/geometry.test.ts",
-    "test:e2e": "npm run build && npm run test:fixtures && node tests/e2e.mjs",
-    "test:live": "node tests/e2e.mjs https://gestureflight-ai.vercel.app",
+    "test:unit": "vite-node tests/gestures.test.ts && vite-node tests/geometry.test.ts && vite-node tests/upgrade.test.ts",
+    "test:e2e": "npm run build && npm run test:fixtures && node tests/e2e.mjs && node tests/e2e-upgrade.mjs",
+    "test:live": "node tests/e2e.mjs https://gestureflight-ai.vercel.app && node tests/e2e-upgrade.mjs https://gestureflight-ai.vercel.app",
     "test": "npm run typecheck && npm run test:unit && npm run test:e2e"
   },
   "devDependencies": {
@@ -23,6 +23,8 @@
   },
   "dependencies": {
     "@mediapipe/tasks-vision": "^1.2.0",
+    "occt-import-js": "^0.0.23",
+    "pdfjs-dist": "^6.5.438",
     "three": "^0.187.0"
   }
 }

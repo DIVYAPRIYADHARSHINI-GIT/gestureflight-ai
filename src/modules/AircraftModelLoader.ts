@@ -75,8 +75,13 @@ export class AircraftModelLoader {
       group.traverse((o) => {
         if ((o as THREE.Mesh).isMesh) {
           const m = o as THREE.Mesh;
-          m.castShadow = true;
-          m.receiveShadow = true;
+          // Respect an explicit opt-out set by the part builder (see the cabin
+          // windows): transmissive instanced meshes must stay out of the
+          // shadow pass.
+          if (m.userData.noShadow !== true) {
+            m.castShadow = true;
+            m.receiveShadow = true;
+          }
           m.userData.componentId = id;
           meshes.push(m);
         }
@@ -282,6 +287,14 @@ export class AircraftModelLoader {
         }
       }
       inst.userData.componentId = "fuselage";
+      // Flat, flush windows cast no meaningful shadow, and an InstancedMesh
+      // using a transmissive MeshPhysicalMaterial cannot compile its depth
+      // shader on strict/software GL backends (fails VALIDATE_STATUS on
+      // SwiftShader). Excluding it from the shadow pass is both correct and
+      // cheaper.
+      inst.castShadow = false;
+      inst.receiveShadow = false;
+      inst.userData.noShadow = true;
       g.add(inst);
     }
 

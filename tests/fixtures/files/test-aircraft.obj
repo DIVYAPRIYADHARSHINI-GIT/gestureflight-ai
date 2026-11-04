@@ -1,0 +1,17 @@
+# GestureFlight test OBJ - two named objects
+o Fuselage
+v 0 0 0
+v 8 0 0
+v 8 1 0
+v 0 1 0
+vn 0 0 1
+f 1//1 2//1 3//1
+f 1//1 3//1 4//1
+o Wing
+v 3 0 -4
+v 5 0 -4
+v 5 0 4
+v 3 0 4
+vn 0 1 0
+f 5//2 6//2 7//2
+f 5//2 7//2 8//2

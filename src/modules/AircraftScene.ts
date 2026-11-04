@@ -31,6 +31,11 @@ export class AircraftScene {
   private baseDist = 34;
   /** Zoom-out multiplier applied while the aircraft is exploded. */
   private explodeFraming = 1;
+  /** Key light + env map, retained so quality profiles can retune them (§4). */
+  private keyLight: THREE.DirectionalLight | null = null;
+  private envMap: THREE.CubeTexture | null = null;
+  /** Deferred shadow-map resize, applied at a safe frame boundary. */
+  private pendingShadowResize: (() => void) | null = null;
 
   private cursor: THREE.Mesh;
   private cursorRing: THREE.Mesh;
@@ -82,7 +87,16 @@ export class AircraftScene {
   private buildEnvironment(): void {
     this.scene.add(new THREE.HemisphereLight(0x9fd8ff, 0x0a1220, 1.15));
 
+    // Environment map for metal reflections (§4). Built as a plain cube texture
+    // from canvases rather than via PMREMGenerator: PMREM leaves the renderer in
+    // a state that makes the next shadow-map depth pass fail shader validation
+    // on software GL backends (reproduced on SwiftShader), and a gradient cube
+    // gives the same visual result here for a fraction of the cost.
+    this.envMap = this.makeEnvironmentMap();
+    this.scene.environment = this.envMap;
+
     const key = new THREE.DirectionalLight(0xffffff, 2.1);
+    this.keyLight = key;
     key.position.set(18, 26, 14);
     key.castShadow = true;
     key.shadow.mapSize.set(1024, 1024);
@@ -219,6 +233,77 @@ export class AircraftScene {
     return this.cursor.visible;
   }
 
+  /**
+   * Builds a 6-face cube environment map from canvas gradients: a bright "sky"
+   * above, a dark hangar floor below, and a cool horizon band. Metal surfaces
+   * sample this for their reflections.
+   */
+  private makeEnvironmentMap(): THREE.CubeTexture {
+    const S = 128;
+    const faces: HTMLCanvasElement[] = [];
+    // Order: +X, -X, +Y, -Y, +Z, -Z
+    const specs: Array<[string, string]> = [
+      ["#1b4254", "#0a1522"],
+      ["#163a4a", "#0a1522"],
+      ["#bfe9f5", "#3d7f95"], // up — the bright source
+      ["#060a11", "#0a1018"], // down — hangar floor
+      ["#1d4759", "#0a1522"],
+      ["#12303d", "#0a1522"],
+    ];
+    for (const [top, bottom] of specs) {
+      const c = document.createElement("canvas");
+      c.width = S;
+      c.height = S;
+      const g = c.getContext("2d")!;
+      const grad = g.createLinearGradient(0, 0, 0, S);
+      grad.addColorStop(0, top);
+      grad.addColorStop(1, bottom);
+      g.fillStyle = grad;
+      g.fillRect(0, 0, S, S);
+      faces.push(c);
+    }
+    const tex = new THREE.CubeTexture(faces);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    tex.needsUpdate = true;
+    return tex;
+  }
+
+  /**
+   * Applies a render-quality profile (§4). The shadow-map resize is deferred to
+   * a frame boundary so the depth pass is never rebuilt mid-call.
+   */
+  applyQuality(p: {
+    pixelRatio: number;
+    shadows: boolean;
+    shadowMapSize: number;
+    reflections: boolean;
+  }): void {
+    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, p.pixelRatio));
+    this.renderer.shadowMap.enabled = p.shadows;
+    this.renderer.shadowMap.type = p.shadows ? THREE.PCFSoftShadowMap : THREE.BasicShadowMap;
+
+    if (this.keyLight) {
+      this.keyLight.castShadow = p.shadows;
+      if (p.shadows && this.keyLight.shadow.mapSize.width !== p.shadowMapSize) {
+        const light = this.keyLight;
+        const size = p.shadowMapSize;
+        this.pendingShadowResize = () => {
+          light.shadow.mapSize.set(size, size);
+          light.shadow.map?.dispose();
+          light.shadow.map = null;
+        };
+      }
+    }
+
+    // Reflections come from the env map; dropping it is the cheap win.
+    this.scene.environment = p.reflections ? this.envMap : null;
+    this.scene.traverse((o) => {
+      const m = (o as THREE.Mesh).material as THREE.MeshStandardMaterial | undefined;
+      if (m && "envMapIntensity" in m) m.envMapIntensity = p.reflections ? 0.55 : 0;
+    });
+    this.resize();
+  }
+
   /** Raycast from normalised screen coords against the given meshes. */
   pick(nx: number, ny: number, targets: THREE.Object3D[]): THREE.Intersection | null {
     const ndc = new THREE.Vector2(nx * 2 - 1, -(ny * 2 - 1));
@@ -239,6 +324,12 @@ export class AircraftScene {
       const now = performance.now();
       const dt = Math.min(0.1, (now - last) / 1000);
       last = now;
+
+      if (this.pendingShadowResize) {
+        const fn = this.pendingShadowResize;
+        this.pendingShadowResize = null;
+        fn();
+      }
 
       this.onFrame?.(dt);
       this.updateCamera(dt);
@@ -285,6 +376,7 @@ export class AircraftScene {
     this.disposed = true;
     cancelAnimationFrame(this.raf);
     this.resizeObs.disconnect();
+    this.envMap?.dispose();
     this.renderer.dispose();
     this.renderer.domElement.remove();
   }

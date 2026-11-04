@@ -154,3 +154,57 @@ export const AIRCRAFT: AircraftSpec[] = [
 export function aircraftById(id: string): AircraftSpec {
   return AIRCRAFT.find((a) => a.id === id) ?? AIRCRAFT[0];
 }
+
+/**
+ * Builds an aircraft spec from blueprint-derived dimensions (§3).
+ *
+ * The three dimensions the user reads off the drawing drive the envelope; the
+ * remaining shape parameters are scaled from the closest built-in class so the
+ * result is PROPORTIONALLY consistent rather than invented. The caller labels
+ * the output "reconstructed", and the UI never presents it as imported
+ * geometry or as a measured aircraft.
+ */
+export function reconstructedAircraft(dims: {
+  length: number;
+  span: number;
+  height: number;
+}): AircraftSpec {
+  const ratio = dims.span / dims.length;
+  // Pick the closest reference class by span:length, then rescale it.
+  const base = AIRCRAFT.reduce((best, a) => {
+    const r = a.profile.wingSpan / a.profile.length;
+    const bestR = best.profile.wingSpan / best.profile.length;
+    return Math.abs(r - ratio) < Math.abs(bestR - ratio) ? a : best;
+  }, AIRCRAFT[0]);
+
+  const k = dims.length / base.profile.length;
+  return {
+    id: "reconstructed",
+    category: "Reconstructed from blueprint",
+    name: "Reconstructed Aircraft",
+    role: `Built from your blueprint dimensions · proportions from the ${base.category.toLowerCase()} class`,
+    specs: {
+      Length: `${dims.length.toFixed(1)} m (from blueprint)`,
+      Wingspan: `${dims.span.toFixed(1)} m (from blueprint)`,
+      Height: `${dims.height.toFixed(1)} m (from blueprint)`,
+      "Span : length": ratio.toFixed(2),
+      "Reference class": base.category,
+      Geometry: "Reconstructed, not imported",
+    },
+    note: "RECONSTRUCTED geometry. Only the three overall dimensions come from your blueprint; all remaining shape detail (aerofoil, sweep, nacelles, gear) is scaled from the closest built-in reference class and is illustrative. This is not a measured reproduction of your design.",
+    profile: {
+      ...base.profile,
+      length: dims.length,
+      wingSpan: dims.span,
+      fuselageRadius: base.profile.fuselageRadius * k,
+      wingChord: base.profile.wingChord * k,
+      wingZ: base.profile.wingZ * k,
+      engineRadius: base.profile.engineRadius * k,
+      engineLength: base.profile.engineLength * k,
+      // Height is the one extra measured figure: use it for the fin.
+      tailHeight: Math.max(0.5, dims.height - base.profile.fuselageRadius * k * 2),
+      hStabSpan: base.profile.hStabSpan * k,
+      omits: ["All detail beyond the three measured dimensions is illustrative"],
+    },
+  };
+}

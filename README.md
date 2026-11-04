@@ -52,6 +52,20 @@ no external AI service, no database and no cloud processing of any kind.
 - **Synthesised sound effects** (no audio files), off by default.
 - Respects `prefers-reduced-motion`.
 
+### Added in the upload / engine upgrade
+
+- **Upload your own aircraft design** — STEP, STP, STL, OBJ, GLB, GLTF, PDF, PNG, JPG, by drag-and-drop or file picker, parsed entirely in your browser.
+- **Real STEP (B-rep) import** via an OpenCascade WebAssembly build — verified against real STEP files, not a stub.
+- **Blueprint reference viewer** for PDF/PNG/JPG with zoom, pan, multi-page navigation and a view classifier that shows its reasoning and can be corrected.
+- **Assisted blueprint-to-3D reconstruction** — enter the three overall dimensions from the drawing and get a proportionally-correct airframe, labelled *reconstructed*, never *imported*.
+- **Advanced internal jet engine explorer** — 13 assemblies across both spools, selectable, hideable, isolatable, explodable and reassemblable.
+- **Engine cutaway mode** that removes the outer casings to reveal the compressor, combustor and turbine stages.
+- **Animated airflow visualisation** along intake → fan → compressor → combustor → turbine → exhaust, clearly labelled illustrative.
+- **Five exploration modes** and **three render-quality profiles**.
+- **Three new gestures** — pinch+move to drag a part, and swipe left/right to step through components.
+- **Context-aware gestures**: the same hand shapes drive the aircraft, the engine, or an isolated component depending on what has focus.
+- **Geometry-provenance badges** everywhere, distinguishing *imported*, *reconstructed* and *illustrative* geometry.
+
 ---
 
 ## Technology stack
@@ -64,9 +78,19 @@ All free and open source:
 | [@mediapipe/tasks-vision](https://ai.google.dev/edge/mediapipe) | Hand landmark detection | Apache-2.0 |
 | [vite](https://vite.dev) | Dev server + production build | MIT |
 | TypeScript | Type safety | Apache-2.0 |
+| [occt-import-js](https://github.com/kovacsv/occt-import-js) | STEP (B-rep) import, OpenCascade WASM | LGPL-2.1 + OCCT exception |
+| [pdfjs-dist](https://mozilla.github.io/pdf.js/) | PDF blueprint rendering | Apache-2.0 |
 | [puppeteer](https://pptr.dev) | E2E testing (dev only) | Apache-2.0 |
 
-No runtime dependency outside `three` and `@mediapipe/tasks-vision`.
+Runtime dependencies are `three`, `@mediapipe/tasks-vision`, `occt-import-js`
+and `pdfjs-dist`. The latter two are **lazily imported**, so they are only
+downloaded when you actually upload a STEP or PDF file.
+
+> **Open CASCADE notice.** STEP import uses facilities provided by the Open
+> CASCADE Technology software. `occt-import-js.wasm` is shipped **unmodified**
+> as a separate asset in `public/occt/`, alongside its licence texts
+> (`license.occt.txt`, `license.occt-import-js.txt`), so it can be replaced with
+> your own build as LGPL-2.1 requires.
 
 ---
 
@@ -126,8 +150,25 @@ full manual control set stays active, so the aircraft explorer remains usable.
 | ☝ **Pointing finger** | Select a component | Extend the index finger only. A cursor follows your fingertip and highlights whatever part is under it. |
 | 🤏 **Pinch** | Pull out the selected part | Touch thumb and index fingertips together while a component is selected. Pinch again to return it. |
 | 🙌 **Two-hand distance** | Zoom | Show both hands. Apart = zoom in, together = zoom out. |
-| ✌ **Peace sign** | Next aircraft | Index + middle fingers up, separated; others curled. |
+| ✌ **Peace sign** | Next aircraft *(aircraft mode)* / next exploration mode *(engine mode)* | Index + middle fingers up, separated; others curled. |
 | 👍 **Thumbs up** | Confirm the action | Thumb out, all four fingers curled. |
+| ✊↔ **Pinch + move** | Move the isolated component | Hold the pinch and move your hand. Only active while a part is pulled out. |
+| 👈 **Swipe left** | Previous component / view | With an open hand, sweep quickly left. |
+| 👉 **Swipe right** | Next component / view | With an open hand, sweep quickly right. |
+
+### Context-aware gestures
+
+The same hand shapes act on whatever currently has focus:
+
+| Active mode | Open palm explodes… | Pointing selects… | Pinch isolates… |
+| --- | --- | --- | --- |
+| Aircraft Exterior / Exploded | the aircraft | an aircraft component | an aircraft component |
+| Engine Explorer / Cutaway | the engine | an engine component | an engine component |
+
+Changing subject clears every in-flight gesture anchor, so a gesture in progress
+cannot leak motion into the newly-focused object. Swipe is checked **before**
+pose classification and pre-empts it — otherwise a sweeping open hand would read
+as “open palm” and explode the model mid-swipe.
 
 ### Why gestures do not misfire
 
@@ -204,6 +245,127 @@ illustrative everywhere they appear.
 
 ---
 
+## Uploading your own aircraft design
+
+Drag a file anywhere onto the page, or use **Upload Aircraft Design** in the
+left panel.
+
+| Format | Status | What you get |
+| --- | --- | --- |
+| `.glb` | ✅ Fully supported | Real geometry + PBR materials + per-object names |
+| `.gltf` | ✅ Fully supported | Same, provided the file is self-contained |
+| `.step` / `.stp` | ✅ Fully supported | Real B-rep geometry tessellated by OpenCascade |
+| `.stl` | ✅ Fully supported | Real geometry (single mesh — STL has no part structure) |
+| `.obj` | ✅ Fully supported | Real geometry + `o`/`g` group names |
+| `.pdf` | ✅ Blueprint reference | Rendered pages + assisted reconstruction |
+| `.png` / `.jpg` | ✅ Blueprint reference | Rendered image + assisted reconstruction |
+
+The file is read with `FileReader` and parsed in this tab. **Nothing is
+uploaded.** Object URLs are revoked and GPU geometry is disposed when you remove
+a model.
+
+### What the app will and will not claim
+
+This is the core honesty contract of the upgrade:
+
+- A format is only reported as loaded when **real geometry actually came out of
+  the parser**. A renamed or corrupt file is rejected by magic-byte sniffing
+  with a specific reason, never shown as an empty scene.
+- **Component names come from your file.** If an object is unnamed, it is
+  labelled by index and said to be unnamed.
+- **The app never invents a function for an imported part.** CAD and mesh files
+  do not record what a part does, and the panel says exactly that.
+- If your file is a **single mesh**, the app states plainly that components
+  cannot be extracted from it, rather than pretending to segment it.
+- **No format here records real-world units reliably**, so extents are shown in
+  the file’s own units instead of a fabricated wingspan in metres.
+
+### Blueprint to 3D
+
+A 2D drawing cannot be converted into an engineering-accurate 3D aircraft
+automatically, and the app says so rather than faking it. Instead:
+
+1. The blueprint renders in a pan/zoom viewer.
+2. A conservative classifier guesses whether each page is a **top**, **side** or
+   **front** view, **shows the reasoning** (aspect ratio and centreline
+   symmetry), and lets you correct it.
+3. You enter the three overall dimensions from the drawing.
+4. The app builds a proportionally-correct airframe, scaling the closest
+   built-in reference class to your numbers.
+
+If you leave the dimensions blank it **refuses to build** and says it will not
+invent them. Implausible proportions are rejected too. The result is labelled
+**RECONSTRUCTED** in the panel and on the HUD badge — never *imported*, never
+*measured*.
+
+---
+
+## Engine Explorer
+
+Press **Enter Engine** (or switch to Engine mode) to explore a jet engine
+internally. The model is built lazily on first entry.
+
+**Low-pressure spool:** fan blades · low-pressure compressor · low-pressure turbine
+**High-pressure spool:** high-pressure compressor · high-pressure turbine
+**Core:** combustion chamber · fuel injection system
+**Hot section:** exhaust nozzle · **Cold section:** fan casing
+**Structure:** engine shafts · bearings & supports · core casing
+
+Each is selectable, hideable, isolatable and individually documented. Rotor and
+stator stages are modelled as real bladed discs — the HP compressor’s blades
+visibly shrink stage by stage as the air is compressed, and the LP turbine’s
+grow as the gas expands.
+
+- **Explode / assemble** — exactly reversible, driven by hand openness.
+- **Cutaway** — removes the fan casing, core casing and nozzle to reveal the
+  internals. Rotating assemblies are never hidden.
+- **Airflow** — animated arrows along intake → fan → compressor → combustor →
+  turbine → exhaust, in two streams (cold bypass, hot core).
+
+### ⚠ Engine geometry provenance
+
+**The engine is an explicitly ILLUSTRATIVE educational model**, generated
+procedurally. It is not a model of any specific real engine.
+
+If you upload an aircraft, its engine nacelle is an **external shape with no
+internals to extract** — so the app does not pretend otherwise. It loads this
+separate educational engine and says so in the panel. The airflow arrows are a
+teaching diagram, **not a CFD or engine simulation**, and that is stated in the
+UI next to the toggle.
+
+The engine data deliberately contains **no fabricated thrust, pressure ratio,
+temperature, shaft speed or stage-count figures** — a unit test asserts this by
+regex. The descriptions explain *how a two-spool high-bypass turbofan works*,
+which needs no invented numbers.
+
+---
+
+## Exploration modes
+
+| Mode | Subject | What it does |
+| --- | --- | --- |
+| Aircraft Exterior | aircraft | Rotate, zoom, select exterior components |
+| Aircraft Exploded | aircraft | Separate the airframe and inspect parts |
+| Engine Explorer | engine | Explore internal engine assemblies |
+| Engine Cutaway | engine | Casings hidden, internals + airflow visible |
+| Blueprint Reference | blueprint | View the uploaded drawing (only when one is loaded) |
+
+Switching modes **never** resets the application or stops webcam tracking — it
+only changes which object tree is visible and where gestures are routed.
+
+## Render quality
+
+| Profile | Pixel ratio | Shadows | Reflections |
+| --- | --- | --- | --- |
+| Performance | 1× | off | off |
+| Balanced *(default)* | 1.5× | 1024² | on |
+| High Quality | 2× | 2048² | on |
+
+Uploaded geometry is **never** distorted to improve appearance — only one
+uniform scale is applied to frame it, never a per-axis stretch.
+
+---
+
 ## 3D asset credits and licences
 
 **No third-party 3D model is bundled.** Section 5 of the project brief asks for a
@@ -267,10 +429,10 @@ This application is privacy-first by construction, not by policy.
 
 ```bash
 npm run typecheck   # TypeScript, zero errors
-npm run test:unit   # 70 unit tests (Node, no browser)
-npm run test:e2e    # 110 E2E checks in real headless Chrome
+npm run test:unit   # 121 unit tests (Node, no browser)
+npm run test:e2e    # 262 E2E checks in real headless Chrome
 npm test            # all of the above
-npm run test:live   # run the E2E suite against the deployed URL
+npm run test:live   # run the E2E suites against the deployed URL
 ```
 
 ### Test results
@@ -279,9 +441,29 @@ npm run test:live   # run the E2E suite against the deployed URL
 | --- | --- | --- |
 | `tests/gestures.test.ts` | 42 | ✅ pass |
 | `tests/geometry.test.ts` | 28 | ✅ pass |
+| `tests/upgrade.test.ts` | 51 | ✅ pass |
 | `tests/e2e.mjs` | 110 | ✅ pass |
+| `tests/e2e-upgrade.mjs` | 152 | ✅ pass |
 | `tsc --noEmit` | — | ✅ clean |
-| **Total** | **180** | **✅ all passing** |
+| **Total** | **383** | **✅ all passing** |
+
+### Format test results (real files, real parsers)
+
+Every format is tested with a real file in `tests/fixtures/files/`, and nothing
+is marked as passing unless geometry or pages genuinely came out:
+
+| Format | Test file | Result |
+| --- | --- | --- |
+| GLB | `test-aircraft.glb` | ✅ 232 triangles, **5 named objects** |
+| GLTF | `test-aircraft.gltf` | ✅ 232 triangles, **5 named objects** |
+| STEP | `test-assembly.step` | ✅ **1,602 triangles** from real B-rep tessellation |
+| STL | `test-wedge.stl` | ✅ 4 triangles, 1 object (single mesh, correctly reported) |
+| OBJ | `test-aircraft.obj` | ✅ 4 triangles, **2 named groups** |
+| PDF | `blueprint-2sheet.pdf` | ✅ **2 pages** rendered; sheet 1 classified *top view* (84% symmetry) |
+| PNG | `blueprint-top.png` | ✅ 1200×520 rendered; classified *side* (honest — see limitations) |
+| JPG | `blueprint-side.jpg` | ✅ 1200×380 rendered; classified *unknown*, prompts manual choice |
+| Renamed PNG → `.step` | `corrupt.step` | ✅ **rejected** by magic-byte sniffing |
+| Unsupported | `notes.dwg` | ✅ **rejected** with the supported-format list |
 
 **Unit tests** drive the pure classifier with synthetic kinematic hand fixtures
 (`tests/fixtures/hands.ts`) — 21 anatomically plausible landmarks per pose,
@@ -311,13 +493,43 @@ calibration persists, that the privacy sentence appears verbatim, that there is
 no horizontal overflow at 1512 / 1280 / 1024 / 820 / 390 px, and that the whole
 run produces **zero console errors**.
 
+**Upgrade tests** cover the pure logic (format registry, validation, magic-byte
+sniffing, swipe detection, mode arbitration, engine data integrity, blueprint
+reconstruction maths, engine geometry and its exactly-reversible explode) plus a
+152-check browser suite that uploads real files of every format through the real
+file input, verifies honest rejection of corrupt and unsupported files, drives
+the full blueprint→reconstruction workflow, exercises the engine explorer
+(explode, assemble, cutaway, visibility, airflow, isolation), and proves
+**context-aware gesture routing**: the same open-palm gesture explodes the
+aircraft in aircraft mode (`aircraft=0.98 engine=0`) and the engine in engine
+mode (`aircraft=0 engine=0.98`). A regression block re-checks that all eight
+original gestures, the four built-in aircraft, their 13 components, the webcam
+pipeline and every existing control still work.
+
 **Verification beyond the assertions:** the rendered WebGL output was inspected
 as a downsampled luminance silhouette from top, side and front for all four
 aircraft, confirming the airliner's swept planform and upswept tail, the
 fighter's 42° delta and twin canted fins, the freighter's wide boxy high-wing
 body, and the business jet's T-tail. Screenshots are in `docs/screenshots/`.
 
-### Bugs the suites caught and fixed
+### Bugs the upgrade suites caught and fixed
+
+6. **A transmissive `InstancedMesh` broke the shadow pass.** The instanced cabin
+   windows used a `MeshPhysicalMaterial` with transmission; its depth shader
+   fails `VALIDATE_STATUS` on strict/software GL backends (reproduced on
+   SwiftShader), printing two console errors on **every** page load. Flat flush
+   windows cast no meaningful shadow, so they are now excluded from the shadow
+   pass — correct *and* cheaper. Found by the “zero console errors” assertion and
+   bisected by disabling features one at a time.
+7. **Momentary gestures were invisible in the UI.** A swipe occupies a single
+   frame, so the gesture label was overwritten by the next pose before the user
+   could read it — breaking §7’s “visual feedback for every recognized action”.
+   Momentary gestures now hold their label for 1.1 s.
+8. **PDF worker 404.** `pdf.worker.min.mjs` must be served from our own origin
+   (no CDN, per §12). A test harness missing the `.mjs` MIME type surfaced this
+   as a real “Setting up fake worker failed” error.
+
+### Bugs the original suites caught and fixed
 
 1. **Finger-extension thresholds were far too loose** — a relaxed, half-closed
    hand classified as an open palm, so simply resting your hand in frame
@@ -401,7 +613,32 @@ Stated plainly:
 10. **The thumbs-up "confirm" gesture is advisory.** Actions in this app apply
     immediately and are all reversible, so there is no destructive operation to
     gate; confirm acknowledges the pending action and locks in the current view.
-11. **E2E gesture tests inject landmark frames** rather than rendering a
+11. **Blueprint view classification is a heuristic, and is presented as one.**
+    It uses aspect ratio and centreline symmetry only. In testing it read a
+    symmetric plan view correctly from the PDF (84% symmetry) but called the
+    standalone PNG plan view a *side elevation*, because its tail surfaces broke
+    the symmetry measure. This is exactly why the guess is always shown with its
+    reasoning and is user-overridable — it is a hint, not a claim.
+12. **Reconstruction is proportional, not measured.** Only the three dimensions
+    you type are yours; aerofoil, sweep, nacelle and gear detail are scaled from
+    the closest built-in class. It is not a reproduction of your drawing.
+13. **Imported single meshes cannot be segmented.** There is no assisted
+    geometric segmentation of a one-mesh model — the app reports the limitation
+    and offers component-level exploration only for files that carry real
+    sub-objects (STEP assemblies, GLB/GLTF node trees, OBJ groups).
+14. **`.gltf` with external resources is rejected.** A `.gltf` referencing
+    separate `.bin`/texture files cannot resolve them from a single local file
+    selection; the error message says to use a self-contained `.glb`.
+15. **STEP colours and assembly names depend on the exporter.** Many STEP files
+    carry one unnamed solid, in which case you get one object — correctly
+    reported rather than split up artificially.
+16. **No persistence.** Uploaded models live in memory only and are gone on
+    reload; nothing is written to storage (§12).
+17. **Web Workers are used only where the library provides them** (PDF.js runs
+    its own worker). STEP tessellation and mesh parsing run on the main thread
+    but yield to the browser between pipeline stages, so the UI stays responsive
+    rather than freezing.
+18. **E2E gesture tests inject landmark frames** rather than rendering a
     synthetic hand into the fake camera. The classifier itself is covered
     end-to-end by the unit suite on real landmark geometry; the E2E suite
     verifies the gesture→action wiring, the live camera path and the MediaPipe
@@ -437,7 +674,11 @@ gestureflight-ai/
 │       ├── AircraftInformation.ts  # Spec and component panels
 │       ├── SettingsManager.ts      # Calibration + synthesised sound
 │       ├── geometry.ts             # Aerofoil / fuselage / nacelle primitives
-│       └── views.ts                # Guide, calibration, about sheets
+│       ├── views.ts                # Guide, calibration, about sheets
+│       ├── AircraftFileProcessor.ts  # Upload validation + all format parsers
+│       ├── UploadPanel.ts            # Upload UI, library, blueprint viewer
+│       ├── EngineExplorer.ts         # Internal engine model + airflow
+│       └── ExplorationModes.ts       # 5 modes + 3 quality profiles
 ├── tests/
 │   ├── fixtures/hands.ts       # Synthetic kinematic hand poses
 │   ├── gestures.test.ts        # 42 unit tests

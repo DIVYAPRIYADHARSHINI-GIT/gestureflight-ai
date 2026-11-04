@@ -121,12 +121,19 @@ for (const [pose, expected] of EXPECTED) {
   });
 }
 
-test("every gesture is recognised at least once across the pose set — all 8 covered", () => {
+test("every single-hand POSE gesture is recognised across the pose set", () => {
   const found = new Set<GestureId>();
   for (const pose of Object.values(POSES)) found.add(classifyHand(trackedHand(pose())).id);
-  // two_hand_zoom is arbitrated by the controller, not the single-hand classifier.
-  for (const g of GESTURE_SEQUENCE.filter((g) => g !== "two_hand_zoom")) {
+  // These are not static hand shapes, so the single-hand classifier cannot and
+  // must not produce them — they are arbitrated by GestureController instead:
+  //   two_hand_zoom → needs two hands
+  //   swipe_left/right, pinch_drag → motion over time, not a pose
+  const notPoses = new Set<GestureId>(["two_hand_zoom", "swipe_left", "swipe_right", "pinch_drag"]);
+  for (const g of GESTURE_SEQUENCE.filter((g) => !notPoses.has(g))) {
     assert.ok(found.has(g), `${g} was never produced by the pose set`);
+  }
+  for (const g of notPoses) {
+    assert.ok(!found.has(g), `${g} must not be produced by the static pose classifier`);
   }
 });
 

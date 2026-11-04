@@ -122,6 +122,30 @@ export const GESTURES: Record<GestureId, GestureMeta> = {
     how: "Show both hands. Move them apart to zoom in, bring them together to zoom out.",
     hands: 2,
   },
+  pinch_drag: {
+    id: "pinch_drag",
+    name: "Pinch + Move",
+    glyph: "✊↔",
+    action: "Move the isolated component",
+    how: "Hold the pinch and move your hand to drag the isolated component through space. Release to drop it.",
+    hands: 1,
+  },
+  swipe_left: {
+    id: "swipe_left",
+    name: "Swipe Left",
+    glyph: "👈",
+    action: "Previous component / view",
+    how: "With an open hand, sweep quickly to the left to step back through components or views.",
+    hands: 1,
+  },
+  swipe_right: {
+    id: "swipe_right",
+    name: "Swipe Right",
+    glyph: "👉",
+    action: "Next component / view",
+    how: "With an open hand, sweep quickly to the right to step forward through components or views.",
+    hands: 1,
+  },
 };
 
 /** Gestures shown in the guide and calibration grid, in teaching order. */
@@ -134,7 +158,73 @@ export const GESTURE_SEQUENCE: GestureId[] = [
   "two_hand_zoom",
   "peace",
   "thumbs_up",
+  "pinch_drag",
+  "swipe_left",
+  "swipe_right",
 ];
+
+/**
+ * SwipeDetector — recognises a fast lateral hand sweep.
+ *
+ * A swipe is a MOTION, not a hand shape, so it cannot be classified from a
+ * single frame like the other gestures. It tracks palm-centre samples over a
+ * short window and fires when the hand crosses a distance threshold faster than
+ * a velocity threshold, then locks out until the hand slows down again — which
+ * stops one physical sweep producing a burst of events.
+ */
+export class SwipeDetector {
+  private samples: Array<{ x: number; t: number }> = [];
+  private armed = true;
+  private lastFire = -Infinity;
+
+  constructor(
+    /** Minimum horizontal travel in normalised image units. */
+    private minTravel = 0.17,
+    /** Minimum speed in units/second. */
+    private minSpeed = 0.55,
+    private cooldownMs = 700,
+  ) {}
+
+  configure(opts: { minTravel?: number; minSpeed?: number; cooldownMs?: number }): void {
+    if (opts.minTravel !== undefined) this.minTravel = opts.minTravel;
+    if (opts.minSpeed !== undefined) this.minSpeed = opts.minSpeed;
+    if (opts.cooldownMs !== undefined) this.cooldownMs = opts.cooldownMs;
+  }
+
+  /** @returns "swipe_left", "swipe_right", or null. */
+  push(x: number, now: number): "swipe_left" | "swipe_right" | null {
+    this.samples.push({ x, t: now });
+    // Keep a 320 ms window — long enough to measure, short enough to be a flick.
+    while (this.samples.length > 1 && now - this.samples[0].t > 320) this.samples.shift();
+    if (this.samples.length < 3) return null;
+
+    const first = this.samples[0];
+    const travel = x - first.x;
+    const seconds = Math.max(1e-3, (now - first.t) / 1000);
+    const speed = Math.abs(travel) / seconds;
+
+    if (!this.armed) {
+      // Re-arm once the hand has clearly slowed.
+      if (speed < this.minSpeed * 0.4) this.armed = true;
+      return null;
+    }
+
+    if (Math.abs(travel) >= this.minTravel && speed >= this.minSpeed) {
+      if (now - this.lastFire < this.cooldownMs) return null;
+      this.armed = false;
+      this.lastFire = now;
+      this.samples = [];
+      // Image space is mirrored for the user, so +x on screen is a LEFT swipe.
+      return travel > 0 ? "swipe_left" : "swipe_right";
+    }
+    return null;
+  }
+
+  reset(): void {
+    this.samples = [];
+    this.armed = true;
+  }
+}
 
 /* ───────────────────────── geometry helpers ───────────────────────── */
 

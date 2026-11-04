@@ -625,7 +625,8 @@ async function run() {
     await page.click('[data-nav="guide"]');
     await page.waitForSelector("#sheet:not([hidden])", { timeout: 5000 });
     const guideCards = await page.$$eval("#sheet-content .gcard", (n) => n.length);
-    check("gesture guide opens with all 8 gestures documented", guideCards === 8, `${guideCards} cards`);
+    // 8 original gestures + 3 added by the upload/engine upgrade.
+    check("gesture guide documents every gesture", guideCards === 11, `${guideCards} cards`);
     await page.click("#sheet-close");
 
     await page.click('[data-nav="calibration"]');
@@ -633,7 +634,7 @@ async function run() {
     const sliders = await page.$$eval("#sheet-content .calib input[type=range]", (n) => n.length);
     check("calibration offers all 6 sensitivity settings", sliders === 6, `${sliders} sliders`);
     const practiceCards = await page.$$eval("#sheet-content .gguide .gcard", (n) => n.length);
-    check("calibration practice mode lists every gesture", practiceCards === 8);
+    check("calibration practice mode lists every gesture", practiceCards === 11, `${practiceCards} cards`);
 
     const persisted = await page.evaluate(async () => {
       const s = document.querySelectorAll("#sheet-content .calib input[type=range]")[0];

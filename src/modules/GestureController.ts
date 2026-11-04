@@ -18,6 +18,7 @@ import {
   LM,
   remap01,
   Smoothed,
+  SwipeDetector,
   twoHandSpan,
 } from "./GestureRecognition";
 
@@ -37,6 +38,12 @@ export interface GestureActions {
   confirm(): void;
   /** UI feedback for the recognised gesture. */
   report(state: GestureState): void;
+
+  /* ── added by the upload / engine upgrade (§7) ── */
+  /** Drag the currently isolated component by a normalised screen delta. */
+  dragIsolated?(dx: number, dy: number): void;
+  /** Swipe steps through components or views. */
+  step?(direction: 1 | -1): void;
 }
 
 export interface GestureState {
@@ -46,6 +53,18 @@ export interface GestureState {
   hands: number;
   sides: string;
   fired: boolean;
+  /** What the gesture is currently acting on, for the HUD (§7). */
+  context?: string;
+}
+
+/**
+ * Context supplied by the host each frame so the SAME gestures act on whichever
+ * subject is in focus (§7): the aircraft, the engine, or an isolated component.
+ */
+export interface GestureContext {
+  subject: "aircraft" | "engine" | "blueprint";
+  /** True when a single component is pulled out and has focus. */
+  hasIsolated: boolean;
 }
 
 export class GestureController {
@@ -59,6 +78,10 @@ export class GestureController {
   private zoomAnchor: { span: number; zoom: number } | null = null;
   private settings: Settings;
   private enabled = true;
+  private swipe = new SwipeDetector();
+  private pinchDragAnchor: { x: number; y: number } | null = null;
+  /** Updated by the host every frame; drives context-aware routing (§7). */
+  private context: GestureContext = { subject: "aircraft", hasIsolated: false };
 
   constructor(
     private actions: GestureActions,
@@ -86,12 +109,37 @@ export class GestureController {
     if (!on) this.reset();
   }
 
+  /** Host updates this when the mode or isolation state changes (§7). */
+  setContext(ctx: GestureContext): void {
+    if (this.context.subject !== ctx.subject) {
+      // Changing subject invalidates every in-flight anchor, so a gesture in
+      // progress cannot leak motion into the newly-focused object.
+      this.rotateAnchor = null;
+      this.rollAnchor = null;
+      this.pinchDragAnchor = null;
+      this.swipe.reset();
+      this.stabiliser.clear();
+    }
+    this.context = ctx;
+  }
+
+  get currentContext(): GestureContext {
+    return { ...this.context };
+  }
+
+  private contextLabel(): string {
+    if (this.context.hasIsolated) return "isolated component";
+    return this.context.subject;
+  }
+
   /** Clears all anchors; called when hands vanish or gestures are disabled. */
   reset(): void {
     this.stabiliser.clear();
     this.rotateAnchor = null;
     this.rollAnchor = null;
     this.zoomAnchor = null;
+    this.pinchDragAnchor = null;
+    this.swipe.reset();
     this.openness.reset();
     this.zoomSpan.reset();
     this.actions.point(null);
@@ -102,6 +150,7 @@ export class GestureController {
       hands: 0,
       sides: "—",
       fired: false,
+      context: this.contextLabel(),
     });
   }
 
@@ -138,6 +187,7 @@ export class GestureController {
         hands: hands.length,
         sides,
         fired: false,
+        context: this.contextLabel(),
       });
       return;
     }
@@ -148,6 +198,31 @@ export class GestureController {
     const hand = hands[0];
     const f = extractFeatures(hand.landmarks);
     const candidate = classifyHand(hand, this.settings.sensitivity);
+
+    // SWIPE is motion, not pose: it is checked before pose classification and
+    // pre-empts it, because a sweeping open hand would otherwise read as
+    // open_palm and explode the model mid-swipe.
+    if (candidate.id === "open_palm" || candidate.id === "pointing") {
+      const swiped = this.swipe.push(f.center.x, now);
+      if (swiped) {
+        this.stabiliser.clear();
+        this.rotateAnchor = null;
+        this.actions.step?.(swiped === "swipe_right" ? 1 : -1);
+        this.actions.report({
+          gesture: swiped,
+          confidence: 0.9,
+          openness: this.openness.get(),
+          hands: 1,
+          sides,
+          fired: true,
+          context: this.contextLabel(),
+        });
+        return;
+      }
+    } else {
+      this.swipe.reset();
+    }
+
     const res = this.stabiliser.update(
       candidate,
       now,
@@ -161,6 +236,7 @@ export class GestureController {
       this.rollAnchor = null;
     }
     if (res.gesture !== "pointing" && res.gesture !== "pinch") this.actions.point(null);
+    if (res.gesture !== "pinch") this.pinchDragAnchor = null;
 
     switch (res.gesture) {
       case "open_palm": {
@@ -208,6 +284,32 @@ export class GestureController {
         const tip = hand.landmarks[LM.INDEX_TIP];
         this.actions.point(this.pointX.push(1 - tip.x), this.pointY.push(tip.y));
         if (res.fired) this.actions.pinchSelected();
+
+        // PINCH + MOVE (§7): while a component is isolated, holding the pinch
+        // and moving the hand drags that component. The pinch itself already
+        // fired once, so this only adds translation — no conflict.
+        if (this.context.hasIsolated && this.actions.dragIsolated) {
+          if (!this.pinchDragAnchor) {
+            this.pinchDragAnchor = { x: f.center.x, y: f.center.y };
+          } else {
+            const gain = lerp(1.0, 3.0, this.settings.rotationSensitivity);
+            const dx = -(f.center.x - this.pinchDragAnchor.x) * gain;
+            const dy = (f.center.y - this.pinchDragAnchor.y) * gain;
+            if (Math.abs(dx) > 1e-4 || Math.abs(dy) > 1e-4) {
+              this.actions.dragIsolated(dx, dy);
+              this.actions.report({
+                gesture: "pinch_drag",
+                confidence: res.confidence,
+                openness,
+                hands: 1,
+                sides,
+                fired: false,
+                context: this.contextLabel(),
+              });
+            }
+            this.pinchDragAnchor = { x: f.center.x, y: f.center.y };
+          }
+        }
         break;
       }
 
@@ -230,6 +332,7 @@ export class GestureController {
       hands: hands.length,
       sides,
       fired: res.fired,
+      context: this.contextLabel(),
     });
   }
 
