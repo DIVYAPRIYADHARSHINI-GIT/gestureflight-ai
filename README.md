@@ -140,6 +140,29 @@ full manual control set stays active, so the aircraft explorer remains usable.
 
 ---
 
+## Hand-only recognition architecture
+
+Gestures are driven by **MediaPipe Hand Landmarker only** — 21 landmarks per
+hand, up to two hands. The app initialises **no** face, eye, body-pose, object
+or segmentation model, and asserts this in its test suite:
+
+- The production bundle is audited for any instantiation of `FaceLandmarker`,
+  `FaceDetector`, `PoseLandmarker`, `ObjectDetector`, `ImageSegmenter`,
+  `HolisticLandmarker` or `GestureRecognizer` — there are none.
+- Only `models/hand_landmarker.task` is ever fetched; no other model asset path
+  is wired to the app's own asset directory.
+- **No valid hand = no action.** A face, a person, a moving object or a busy
+  background all reach the app as exactly the same thing: zero hand landmarks.
+  A 120-frame no-hand test asserts the aircraft never explodes, the engine never
+  explodes, the camera never rotates or zooms, nothing is selected, the aircraft
+  never switches and the mode never changes.
+- Random low-confidence landmark noise is rejected by the confidence threshold.
+
+> `@mediapipe/tasks-vision` ships one monolithic bundle that contains every
+> vision task as dead code, so those class names are unavoidably present as
+> strings. The tests therefore assert on **instantiation and model-asset paths**,
+> which is what would actually load a model — not on string presence.
+
 ## Supported gestures
 
 | Gesture | Action | How to perform it |
@@ -250,15 +273,57 @@ illustrative everywhere they appear.
 Drag a file anywhere onto the page, or use **Upload Aircraft Design** in the
 left panel.
 
-| Format | Status | What you get |
+GestureFlight accepts **38 extensions** across CAD, mesh and drawing formats,
+with **multiple-file selection** and drag-and-drop. Every format declares what
+the app can genuinely do with it — no format is ever shown as loaded unless real
+geometry came out of a parser.
+
+**Fully Supported** — real geometry, extracted in your browser:
+
+| Format | Vendor / standard | Parser |
 | --- | --- | --- |
-| `.glb` | ✅ Fully supported | Real geometry + PBR materials + per-object names |
-| `.gltf` | ✅ Fully supported | Same, provided the file is self-contained |
-| `.step` / `.stp` | ✅ Fully supported | Real B-rep geometry tessellated by OpenCascade |
-| `.stl` | ✅ Fully supported | Real geometry (single mesh — STL has no part structure) |
-| `.obj` | ✅ Fully supported | Real geometry + `o`/`g` group names |
-| `.pdf` | ✅ Blueprint reference | Rendered pages + assisted reconstruction |
-| `.png` / `.jpg` | ✅ Blueprint reference | Rendered image + assisted reconstruction |
+| `.step` `.stp` | ISO 10303 neutral exchange | OpenCascade (WASM) |
+| `.iges` `.igs` | ANSI neutral exchange | OpenCascade (WASM) |
+| `.brep` `.brp` | OpenCascade / FreeCAD | OpenCascade (WASM) |
+| `.glb` | Khronos glTF | three GLTFLoader |
+| `.ply` | Stanford / 3D scanning | three PLYLoader |
+| `.3mf` | 3MF Consortium | three 3MFLoader |
+| `.amf` | ASTM additive manufacturing | three AMFLoader |
+
+**Partially Supported** — geometry loads, but the format cannot carry something:
+
+| Format | Vendor | What is missing |
+| --- | --- | --- |
+| `.gltf` | Khronos | External `.bin`/textures cannot be resolved from a local pick |
+| `.stl` | 3D printing | No names or colours — split into connected shells instead |
+| `.obj` | Wavefront | Companion `.mtl` is not fetched (that needs a network request) |
+| `.fbx` | Autodesk | Embedded textures not extracted |
+| `.dae` | Khronos COLLADA | External textures not fetched |
+| `.3ds` | Autodesk (legacy) | 16-bit vertex limit; external maps not fetched |
+| `.3dm` | Rhino / McNeel | NURBS without a saved render mesh cannot be tessellated |
+| `.ifc` | buildingSMART BIM | Architectural schema, not aircraft components |
+| `.dxf` | AutoCAD / neutral 2D | 2D line work only — read as a blueprint, not a solid |
+
+**Preview Only** — 2D reference for assisted reconstruction: `.pdf` `.png` `.jpg` `.jpeg`
+
+**Requires Conversion** — identified correctly, but **no free browser parser exists**:
+
+| Format | Vendor | How to convert (shown in-app) |
+| --- | --- | --- |
+| `.f3d` `.f3z` | Autodesk Fusion 360 | File → Export → STEP or Mesh |
+| `.sldprt` `.sldasm` `.slddrw` | SolidWorks | Save As → STEP AP214 |
+| `.ipt` `.iam` | Autodesk Inventor | Export → CAD Format → STEP |
+| `.catpart` `.catproduct` `.catdrawing` | CATIA | Save As → STEP |
+| `.prt` `.asm` | PTC Creo | Save As → STEP |
+| `.x_t` `.x_b` `.xmt_txt` `.xmt_bin` | Siemens Parasolid | Export STEP from the source CAD |
+| `.jt` | Siemens JT | Convert with JT2Go or FreeCAD |
+| `.dwg` | AutoCAD | Save As → DXF, or print to PDF |
+| `.fcstd` | FreeCAD | File → Export → STEP or BREP |
+
+These are proprietary container formats. The only browser DWG parsers are
+GPL-3.0 (incompatible with this MIT project) or paid, and the rest have none at
+all — so the app **identifies the file, names the vendor, states plainly that it
+was NOT loaded, and gives the exact export menu path**. It never fakes a load.
 
 The file is read with `FileReader` and parsed in this tab. **Nothing is
 uploaded.** Object URLs are revoked and GPU geometry is disposed when you remove
@@ -275,8 +340,12 @@ This is the core honesty contract of the upgrade:
   labelled by index and said to be unnamed.
 - **The app never invents a function for an imported part.** CAD and mesh files
   do not record what a part does, and the panel says exactly that.
-- If your file is a **single mesh**, the app states plainly that components
-  cannot be extracted from it, rather than pretending to segment it.
+- If your file is a **single mesh**, the app attempts **assisted segmentation**:
+  a union-find over welded vertices recovers separate connected shells, which is
+  how an STL exported as one blob can still be explored part-by-part. If the
+  mesh is genuinely one connected shell it says so and does **not** invent
+  subdivisions. Tiny fragments (under 0.5% of the largest shell) are reported as
+  exporter debris rather than listed as components.
 - **No format here records real-world units reliably**, so extents are shown in
   the file’s own units instead of a fabricated wingspan in metres.
 
@@ -429,8 +498,8 @@ This application is privacy-first by construction, not by policy.
 
 ```bash
 npm run typecheck   # TypeScript, zero errors
-npm run test:unit   # 121 unit tests (Node, no browser)
-npm run test:e2e    # 263 E2E checks in real headless Chrome
+npm run test:unit   # 146 unit tests (Node, no browser)
+npm run test:e2e    # 322 E2E checks in real headless Chrome
 npm test            # all of the above
 npm run test:live   # run the E2E suites against the deployed URL
 ```
@@ -441,11 +510,12 @@ npm run test:live   # run the E2E suites against the deployed URL
 | --- | --- | --- |
 | `tests/gestures.test.ts` | 42 | ✅ pass |
 | `tests/geometry.test.ts` | 28 | ✅ pass |
-| `tests/upgrade.test.ts` | 51 | ✅ pass |
+| `tests/upgrade.test.ts` | 47 | ✅ pass |
+| `tests/formats.test.ts` | 29 | ✅ pass |
 | `tests/e2e.mjs` | 110 | ✅ pass |
-| `tests/e2e-upgrade.mjs` | 153 | ✅ pass |
+| `tests/e2e-upgrade.mjs` | 212 | ✅ pass |
 | `tsc --noEmit` | — | ✅ clean |
-| **Total** | **384** | **✅ all passing** |
+| **Total** | **468** | **✅ all passing** |
 
 ### Format test results (real files, real parsers)
 
@@ -462,6 +532,15 @@ is marked as passing unless geometry or pages genuinely came out:
 | PDF | `blueprint-2sheet.pdf` | ✅ **2 pages** rendered; sheet 1 classified *top view* (84% symmetry) |
 | PNG | `blueprint-top.png` | ✅ 1200×520 rendered; classified *side* (honest — see limitations) |
 | JPG | `blueprint-side.jpg` | ✅ 1200×380 rendered; classified *unknown*, prompts manual choice |
+| IGES | `test-plate.igs` | ✅ real surface geometry via OpenCascade |
+| PLY | `test-tetra.ply` | ✅ geometry + per-vertex colours |
+| AMF | `test-two-parts.amf` | ✅ **2 named objects** |
+| STL (3 shells) | `test-three-shells.stl` | ✅ **segmented into 3 separate parts** |
+| DXF | `test-drawing.dxf` | ✅ 10 entities rendered as a 1945×875 blueprint |
+| SolidWorks | `part.sldprt` | ✅ identified, conversion guidance, **not loaded** |
+| Fusion 360 | `model.f3d` | ✅ identified, conversion guidance, **not loaded** |
+| AutoCAD | `drawing.dwg` | ✅ identified, conversion guidance, **not loaded** |
+| Parasolid | `solid.x_t` | ✅ identified, conversion guidance, **not loaded** |
 | Renamed PNG → `.step` | `corrupt.step` | ✅ **rejected** by magic-byte sniffing |
 | Unsupported | `notes.dwg` | ✅ **rejected** with the supported-format list |
 
@@ -512,7 +591,24 @@ aircraft, confirming the airliner's swept planform and upswept tail, the
 fighter's 42° delta and twin canted fins, the freighter's wide boxy high-wing
 body, and the business jet's T-tail. Screenshots are in `docs/screenshots/`.
 
-### Bugs the upgrade suites caught and fixed
+### Bugs the universal-CAD suites caught and fixed
+
+9. **Blueprint Reference Mode did not gate gestures.** `GestureController` had a
+   `blueprint` subject but never branched on it, so raising a hand while reading
+   a drawing silently exploded the aircraft behind it — a direct §D violation.
+   Caught by a new assertion; the controller now reports the gesture for feedback
+   but routes it to nothing.
+10. **The hand-only bundle audit was initially wrong, not the app.** It flagged
+    `FaceLandmarker` etc., which turned out to be dead strings inside MediaPipe's
+    monolithic bundle, never referenced by this project. Verified by grepping our
+    own source (zero hits) and the vendor bundle (present), then rewrote the
+    assertion to check *instantiation* and *model-asset paths* instead — the
+    things that would actually load a model.
+11. **A one-triangle speck counted as a component.** The segmentation debris
+    threshold floored to 1 triangle, so stray exporter fragments were listed as
+    explorable parts. Raised to 0.5% of the largest shell with a floor of 2.
+
+### Bugs the earlier upgrade suites caught and fixed
 
 6. **A transmissive `InstancedMesh` broke the shadow pass.** The instanced cabin
    windows used a `MeshPhysicalMaterial` with transmission; its depth shader

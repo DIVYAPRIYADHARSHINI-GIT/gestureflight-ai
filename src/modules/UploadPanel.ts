@@ -8,9 +8,8 @@
  * inject markup.
  */
 
+import { ACCEPT_ATTRIBUTE, ALL_EXTENSIONS, CAD_FORMATS, SUPPORT_TIERS, type FormatStatus } from "../data/formats";
 import {
-  ACCEPT_ATTRIBUTE,
-  FORMATS,
   formatBytes,
   STAGES,
   type BlueprintImportResult,
@@ -68,7 +67,7 @@ export class UploadPanel {
     container.replaceChildren();
 
     /* ── drop zone ── */
-    this.input = el("input", { type: "file", accept: ACCEPT_ATTRIBUTE, multiple: false });
+    this.input = el("input", { type: "file", accept: ACCEPT_ATTRIBUTE, multiple: true });
     this.input.style.display = "none";
     this.input.addEventListener("change", () => {
       if (this.input.files?.length) handlers.onFiles(this.input.files);
@@ -80,11 +79,11 @@ export class UploadPanel {
       el("strong", { className: "dropzone__title", textContent: "Upload Aircraft Design" }),
       el("span", {
         className: "dropzone__hint",
-        textContent: "Drag a file here, or click to browse",
+        textContent: "Drag files here, or click to browse — multiple files supported",
       }),
       el("span", {
         className: "dropzone__formats",
-        textContent: "STEP · STP · STL · OBJ · GLB · GLTF · PDF · PNG · JPG",
+        textContent: `STEP · IGES · STL · OBJ · GLB · 3DM · 3MF · FBX · DXF · PDF + ${ALL_EXTENSIONS.length - 10} more`,
       }),
       el("span", {
         className: "dropzone__privacy",
@@ -132,6 +131,7 @@ export class UploadPanel {
     container.append(
       this.input,
       this.dropZone,
+      this.buildFormatBrowser(),
       this.errorBox,
       this.statusBox,
       el("h3", { className: "panel__subtitle", textContent: "Uploaded model library" }),
@@ -140,6 +140,47 @@ export class UploadPanel {
     );
 
     this.renderLibrary([], null);
+  }
+
+  /**
+   * Collapsible list of every accepted format grouped by what the app can
+   * genuinely do with it (§3). This is where "Requires Conversion" formats are
+   * declared up front, so the user is never surprised after uploading.
+   */
+  private buildFormatBrowser(): HTMLElement {
+    const details = el("details", { className: "formats" });
+    const counts: Record<FormatStatus, number> = { full: 0, partial: 0, preview: 0, conversion: 0 };
+    for (const f of CAD_FORMATS) counts[f.status]++;
+
+    details.append(
+      el("summary", {
+        className: "formats__summary",
+        textContent: `${ALL_EXTENSIONS.length} formats accepted — ${counts.full} fully supported, ${counts.conversion} need conversion`,
+      }),
+    );
+
+    for (const tier of ["full", "partial", "preview", "conversion"] as FormatStatus[]) {
+      const group = CAD_FORMATS.filter((f) => f.status === tier);
+      if (!group.length) continue;
+      const section = el("div", { className: "formats__tier" });
+      section.dataset.tier = tier;
+      section.append(
+        el("h4", { className: "formats__tierlabel", textContent: `${SUPPORT_TIERS[tier].label} (${group.length})` }),
+        el("p", { className: "formats__blurb", textContent: SUPPORT_TIERS[tier].blurb }),
+      );
+      const list = el("ul", { className: "formats__list" });
+      for (const f of group) {
+        const li = el("li", { className: "formats__item" }, [
+          el("span", { className: "formats__ext", textContent: f.extensions.join(" ") }),
+          el("span", { className: "formats__vendor", textContent: f.vendor }),
+          el("span", { className: "formats__note", textContent: f.note }),
+        ]);
+        list.append(li);
+      }
+      section.append(list);
+      details.append(section);
+    }
+    return details;
   }
 
   /* ───────── processing status (§1, §3) ───────── */
@@ -179,11 +220,32 @@ export class UploadPanel {
   showError(message: string): void {
     this.statusBox.hidden = true;
     this.errorBox.hidden = false;
-    this.errorBox.textContent = message;
+    this.errorBox.className = "upload__error";
+    this.errorBox.replaceChildren(document.createTextNode(message));
+  }
+
+  /**
+   * Presents a "requires conversion" file as GUIDANCE, not an error (§3).
+   * The format was identified correctly; what the user needs is the export
+   * route, so the notice names the software and the exact menu path.
+   */
+  showConversionNotice(e: { spec: { label: string; vendor: string; note: string; extensions: string[] }; filename: string }): void {
+    this.statusBox.hidden = true;
+    this.errorBox.hidden = false;
+    this.errorBox.className = "upload__convert";
+    this.errorBox.replaceChildren(
+      el("strong", { textContent: `${e.spec.label} — conversion required` }),
+      el("span", {
+        className: "upload__convertfile",
+        textContent: `${e.filename} was identified as a ${e.spec.vendor} file. It was NOT loaded.`,
+      }),
+      el("span", { className: "upload__convertnote", textContent: e.spec.note }),
+    );
   }
 
   clearError(): void {
     this.errorBox.hidden = true;
+    this.errorBox.className = "upload__error";
   }
 
   /* ───────── library (§10) ───────── */
@@ -444,4 +506,4 @@ export class UploadPanel {
   }
 }
 
-export { FORMATS };
+export { CAD_FORMATS as FORMATS };

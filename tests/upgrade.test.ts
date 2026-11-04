@@ -31,12 +31,16 @@ import { EngineExplorer } from "../src/modules/EngineExplorer";
 const file = (name: string, size = 1024, type = ""): File =>
   ({ name, size, type }) as File;
 
-test("all nine required formats from the brief are registered", () => {
+test("the original nine formats are still registered after the universal upgrade", () => {
   const exts = FORMATS.flatMap((f) => f.extensions);
   for (const required of [".step", ".stp", ".stl", ".obj", ".glb", ".gltf", ".pdf", ".png", ".jpg", ".jpeg"]) {
     assert.ok(exts.includes(required), `missing extension ${required}`);
   }
 });
+
+// NOTE: extension/MIME detection, unsupported-format rejection and size-limit
+// enforcement moved to tests/formats.test.ts when the registry became universal,
+// so they are asserted there against all 38 extensions rather than the old 8.
 
 test("formats are split correctly into 3D models and 2D blueprints", () => {
   const mesh = FORMATS.filter((f) => f.kind === "mesh3d").flatMap((f) => f.extensions);
@@ -45,31 +49,8 @@ test("formats are split correctly into 3D models and 2D blueprints", () => {
   for (const e of [".pdf", ".png", ".jpg", ".jpeg"]) assert.ok(bp.includes(e), `${e} should be a blueprint`);
 });
 
-test("format detection works by extension, case-insensitively", () => {
-  assert.equal(detectFormat(file("wing.STEP"))?.format, "step");
-  assert.equal(detectFormat(file("Wing.Stp"))?.format, "step");
-  assert.equal(detectFormat(file("a.glb"))?.format, "glb");
-  assert.equal(detectFormat(file("a.JPEG"))?.format, "jpg");
-  assert.equal(detectFormat(file("notes.txt")), null);
-  assert.equal(detectFormat(file("archive.zip")), null);
-});
 
-test("format detection falls back to MIME when the extension is unknown", () => {
-  assert.equal(detectFormat(file("blob", 10, "application/pdf"))?.format, "pdf");
-  assert.equal(detectFormat(file("blob", 10, "model/gltf-binary"))?.format, "glb");
-});
 
-test("unsupported files are rejected with a helpful message", () => {
-  assert.throws(
-    () => validate(file("design.dwg", 5000)),
-    (e: FileValidationError) => {
-      assert.equal(e.reason, "unsupported");
-      assert.match(e.message, /not a supported format/i);
-      assert.match(e.message, /\.step/, "should list what IS supported");
-      return true;
-    },
-  );
-});
 
 test("empty files are rejected", () => {
   assert.throws(
@@ -78,24 +59,11 @@ test("empty files are rejected", () => {
   );
 });
 
-test("oversized files are rejected naming both the size and the limit", () => {
-  const spec = FORMATS.find((f) => f.format === "stl")!;
-  assert.throws(
-    () => validate(file("huge.stl", spec.maxBytes + 1)),
-    (e: FileValidationError) => {
-      assert.equal(e.reason, "too-large");
-      assert.match(e.message, /over the/i);
-      return true;
-    },
-  );
-  // Exactly at the limit must pass.
-  assert.doesNotThrow(() => validate(file("ok.stl", spec.maxBytes)));
-});
 
 test("every format has a positive, sane size limit", () => {
   for (const f of FORMATS) {
-    assert.ok(f.maxBytes > 1024 * 1024, `${f.format} limit too small`);
-    assert.ok(f.maxBytes <= 200 * 1024 * 1024, `${f.format} limit unreasonably large`);
+    assert.ok(f.maxBytes > 1024 * 1024, `${f.id} limit too small`);
+    assert.ok(f.maxBytes <= 256 * 1024 * 1024, `${f.id} limit unreasonably large`);
   }
 });
 

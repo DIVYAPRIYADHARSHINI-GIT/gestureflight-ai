@@ -165,6 +165,28 @@ export class GestureController {
 
     const sides = hands.map((h) => h.handedness.charAt(0)).join("/") || "—";
 
+    /* ── Blueprint Reference Mode (§D) ────────────────────────────────
+       The blueprint is a 2D reference, not a model. Gestures must NOT reach
+       the aircraft or engine here, or a hand raised while reading a drawing
+       would silently explode the model behind it. Tracking stays live and the
+       recognised gesture is still reported, so the user keeps their feedback —
+       it simply drives nothing. */
+    if (this.context.subject === "blueprint") {
+      const candidate = classifyHand(hands[0], this.settings.sensitivity);
+      const res = this.stabiliser.update(candidate, now, false);
+      this.actions.point(null);
+      this.actions.report({
+        gesture: res.gesture,
+        confidence: res.confidence,
+        openness: this.openness.push(extractFeatures(hands[0].landmarks).openness),
+        hands: hands.length,
+        sides,
+        fired: false,
+        context: "blueprint (view only)",
+      });
+      return;
+    }
+
     /* ── two hands → zoom pre-empts everything else ───────────────── */
     if (hands.length >= 2) {
       const span = this.zoomSpan.push(twoHandSpan(hands[0].landmarks, hands[1].landmarks));

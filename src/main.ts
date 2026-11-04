@@ -29,6 +29,7 @@ import type { GestureId } from "./types";
 /* ── upload / engine upgrade ── */
 import {
   AircraftFileProcessor,
+  ConversionRequiredError,
   FileValidationError,
   validate,
   type GeometrySource,
@@ -883,48 +884,91 @@ class App {
 
   /* ───────── file handling ───────── */
 
+  /**
+   * Handles one OR MANY files (§5). Each is processed in sequence so progress
+   * stays readable and memory never spikes; the last 3D model becomes active,
+   * and every successful import stays in the library to be combined or swapped.
+   */
   private async handleFiles(files: FileList | File[]): Promise<void> {
-    const file = Array.from(files)[0];
-    if (!file || this.busy) return;
+    const list = Array.from(files);
+    if (!list.length || this.busy) return;
+    if (list.length > 1) {
+      this.busy = true;
+      try {
+        const ok: string[] = [];
+        const failed: string[] = [];
+        for (const f of list) {
+          const result = await this.processOne(f, `${ok.length + failed.length + 1}/${list.length}`);
+          (result ? ok : failed).push(f.name);
+        }
+        this.upload.hideProgress();
+        if (ok.length) this.sound.confirm();
+        this.toast(
+          failed.length
+            ? `Loaded ${ok.length} of ${list.length} files — ${failed.length} could not be used`
+            : `Loaded all ${ok.length} files into the model library`,
+        );
+      } finally {
+        this.busy = false;
+      }
+      return;
+    }
+
+    const file = list[0];
     this.busy = true;
     this.upload.clearError();
+    try {
+      if (await this.processOne(file)) {
+        this.upload.hideProgress();
+        this.sound.confirm();
+      }
+    } finally {
+      this.busy = false;
+    }
+  }
 
+  /**
+   * Validates + parses a single file and adds it to the library.
+   * @returns true when it genuinely produced geometry or blueprint pages.
+   */
+  private async processOne(file: File, counter = ""): Promise<boolean> {
     let spec;
     try {
       spec = validate(file);
     } catch (e) {
+      // A "requires conversion" file is identified correctly, not a failure of
+      // validation — it gets guidance, never a fake successful load (§3).
+      if (e instanceof ConversionRequiredError) {
+        this.upload.showConversionNotice(e);
+        return false;
+      }
       this.upload.showError((e as FileValidationError).message);
-      this.toast("Upload rejected — see the panel for details");
-      this.busy = false;
-      return;
+      return false;
     }
 
-    this.upload.showProgress(file.name, spec, file.size, null);
+    this.upload.showProgress(`${counter ? counter + "  " : ""}${file.name}`, spec, file.size, null);
     try {
       const result = await this.processor.process(file, spec, (r: ProgressReport) =>
-        this.upload.showProgress(file.name, spec!, file.size, r),
+        this.upload.showProgress(`${counter ? counter + "  " : ""}${file.name}`, spec!, file.size, r),
       );
       const entry: LibraryEntry = {
         id: `entry-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
         name: file.name,
-        format: spec.format,
+        format: spec.id,
         bytes: file.size,
         kind: result.kind,
         result,
       };
       this.library.push(entry);
-      this.upload.hideProgress();
       await this.activateEntry(entry.id);
-      this.sound.confirm();
+      return true;
     } catch (e) {
       this.upload.showError(
         e instanceof FileValidationError
           ? e.message
           : `Could not process "${file.name}": ${(e as Error).message}`,
       );
-      this.toast("Processing failed — see the panel for details");
-    } finally {
-      this.busy = false;
+      return false;
     }
   }
 
@@ -1027,7 +1071,13 @@ class App {
     }
 
     // §9/§16: say plainly whether the file carried separate components.
-    $("aircraft-disclaimer").textContent = mesh.hasSeparateComponents
+    // Surface parser + segmentation findings honestly (§4, §7).
+    const notes: string[] = [];
+    if (mesh.parserNote) notes.push(mesh.parserNote);
+    if (mesh.segmentationNote) notes.push(mesh.segmentationNote);
+    $("aircraft-disclaimer").textContent = notes.length
+      ? notes.join(" ")
+      : mesh.hasSeparateComponents
       ? `This file contains ${mesh.parts.length} separate objects, ${mesh.parts.filter((p) => p.namedInFile).length} of which are named in the file. Component names come from your file, not from GestureFlight. This format does not record real-world units, so extents are shown in the file's own units rather than converted to metres.`
       : `This file is a SINGLE MESH with no separate component information, so GestureFlight cannot extract individual aircraft components from it. The whole model can be rotated, zoomed and inspected as one object. Use a STEP or GLB file with named sub-assemblies for per-component exploration.`;
   }

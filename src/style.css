@@ -559,6 +559,45 @@ input[type="range"]::-moz-range-thumb {
 .stage__dropinner span { font-size: 15px; color: var(--cyan); }
 .stage__dropinner small { font-size: 11px; color: var(--ink-mute); }
 
+/* ───────────── supported-formats browser ───────────── */
+.formats {
+  margin-top: 10px; border: 1px solid var(--line); border-radius: var(--radius-sm);
+  background: rgba(8, 16, 30, 0.45); overflow: hidden;
+}
+.formats__summary {
+  cursor: pointer; padding: 8px 10px; font-size: 11px; color: var(--ink-soft);
+  list-style: none; user-select: none;
+}
+.formats__summary::-webkit-details-marker { display: none; }
+.formats__summary::before { content: "▸ "; color: var(--cyan); }
+.formats[open] .formats__summary::before { content: "▾ "; }
+.formats__summary:hover { color: var(--ink); background: rgba(56, 225, 240, 0.07); }
+
+.formats__tier { padding: 8px 10px 10px; border-top: 1px solid var(--line); }
+.formats__tierlabel {
+  margin: 0 0 3px; font-size: 10px; letter-spacing: .9px; text-transform: uppercase; font-weight: 700;
+}
+.formats__tier[data-tier="full"] .formats__tierlabel { color: var(--green); }
+.formats__tier[data-tier="partial"] .formats__tierlabel { color: var(--cyan); }
+.formats__tier[data-tier="preview"] .formats__tierlabel { color: var(--teal); }
+.formats__tier[data-tier="conversion"] .formats__tierlabel { color: var(--amber); }
+.formats__blurb { margin: 0 0 7px; font-size: 10px; line-height: 1.5; color: var(--ink-mute); }
+.formats__list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.formats__item { display: flex; flex-direction: column; gap: 1px; }
+.formats__ext { font-family: var(--mono); font-size: 10.5px; color: var(--ink); }
+.formats__vendor { font-size: 9.5px; color: var(--teal); }
+.formats__note { font-size: 9.5px; line-height: 1.45; color: var(--ink-mute); }
+
+/* ───────────── conversion-required notice (guidance, not an error) ───────────── */
+.upload__convert {
+  margin: 10px 0 0; padding: 10px; border-radius: 8px;
+  border: 1px solid rgba(243, 178, 60, 0.45); background: rgba(243, 178, 60, 0.1);
+  display: flex; flex-direction: column; gap: 5px;
+}
+.upload__convert strong { font-size: 12px; color: var(--amber); }
+.upload__convertfile { font-size: 10.5px; color: #f8e3bb; word-break: break-all; }
+.upload__convertnote { font-size: 11px; line-height: 1.55; color: #f8e3bb; }
+
 /* ───────────── responsive ───────────── */
 @media (max-width: 1240px) {
   .layout { grid-template-columns: 286px 1fr 286px; }

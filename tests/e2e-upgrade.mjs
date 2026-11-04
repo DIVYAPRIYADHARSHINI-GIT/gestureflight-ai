@@ -179,6 +179,11 @@ async function run() {
       { file: "test-wedge.stl", label: "STL", expectParts: 1 },
       { file: "test-aircraft.obj", label: "OBJ", expectParts: 2 },
       { file: "test-assembly.step", label: "STEP", expectParts: 1 },
+      // Added by the universal-CAD upgrade.
+      { file: "test-plate.igs", label: "IGES", expectParts: 1 },
+      { file: "test-tetra.ply", label: "PLY", expectParts: 1 },
+      { file: "test-two-parts.amf", label: "AMF", expectParts: 2 },
+      { file: "test-three-shells.stl", label: "STL (3 shells)", expectParts: 3 },
     ];
 
     for (const c of meshCases) {
@@ -244,20 +249,40 @@ async function run() {
     }));
     check("single-mesh STL reports hasSeparateComponents=false", single.separate === false);
     check("single-mesh STL honestly states components cannot be extracted",
-      /SINGLE MESH/i.test(single.disclaimer) && /cannot extract/i.test(single.disclaimer));
+      /single connected shell/i.test(single.disclaimer) && /will not invent/i.test(single.disclaimer),
+      single.disclaimer.slice(0, 90));
     check("component count reflects the single mesh", /single mesh/i.test(single.count), single.count);
 
     /* ───────── invalid / oversized / corrupt ───────── */
     section("Invalid file handling (honest rejection)");
 
+    // notes.dwg is now RECOGNISED as an AutoCAD drawing by the universal
+    // registry, so the honest outcome is conversion guidance, not rejection.
     await upload(page, "notes.dwg");
+    await settle(page);
+    const dwgNotice = await page.evaluate(() => {
+      const c = document.querySelector(".upload__convert");
+      return c ? c.textContent : null;
+    });
+    check("a recognised-but-unopenable format gets conversion guidance",
+      !!dwgNotice && /AutoCAD/i.test(dwgNotice), dwgNotice?.slice(0, 70));
+    check("that guidance names a concrete alternative",
+      !!dwgNotice && /DXF|PDF/i.test(dwgNotice));
+
+    // A genuinely unknown extension is still rejected outright.
+    await page.evaluate(() => {
+      const f = new File([new Uint8Array([1, 2, 3, 4])], "mystery.zzz");
+      const dt = new DataTransfer();
+      dt.items.add(f);
+      window.__gf.handleFiles?.(dt.files);
+    });
     await settle(page);
     let err = await page.evaluate(() => {
       const e = document.querySelector(".upload__error");
       return e && !e.hidden ? e.textContent : null;
     });
-    check("unsupported format is rejected", !!err && /not a supported format/i.test(err), err?.slice(0, 80));
-    check("rejection lists the supported formats", !!err && /\.step/.test(err));
+    check("an unknown extension is rejected", !!err && /not a recognised/i.test(err), err?.slice(0, 80));
+    check("rejection says how many formats ARE accepted", !!err && /\d+ extensions/.test(err));
 
     await upload(page, "corrupt.step");
     await settle(page);
@@ -283,6 +308,61 @@ async function run() {
       }
     });
     void oversize;
+
+    /* ───────── native CAD: identified, never faked ───────── */
+    section("Native CAD formats (identified, conversion required)");
+
+    for (const [file, vendor] of [
+      ["part.sldprt", /SolidWorks/i],
+      ["model.f3d", /Fusion/i],
+      ["drawing.dwg", /AutoCAD/i],
+      ["solid.x_t", /Parasolid/i],
+    ]) {
+      const before = await page.evaluate(() => window.__gf.library.length);
+      await upload(page, file);
+      await settle(page);
+      const st = await page.evaluate(() => {
+        const box = document.querySelector(".upload__convert");
+        return {
+          shown: !!box,
+          text: box?.textContent ?? "",
+          library: window.__gf.library.length,
+        };
+      });
+      check(`${file}: shown as conversion-required guidance`, st.shown, st.text.slice(0, 70));
+      check(`${file}: vendor identified correctly`, vendor.test(st.text), st.text.slice(0, 60));
+      check(`${file}: states it was NOT loaded`, /NOT loaded/i.test(st.text));
+      check(`${file}: gives a concrete export route`, /STEP|DXF|\.stp/i.test(st.text));
+      check(`${file}: never enters the model library`, st.library === before,
+        `library ${before} → ${st.library}`);
+    }
+
+    const stillImported = await page.evaluate(() => window.__gf.geometrySource);
+    check("a conversion-required file does not change the active geometry",
+      stillImported === "imported", stillImported);
+
+    /* ───────── DXF 2D drawing ───────── */
+    section("DXF drawing import");
+    await upload(page, "test-drawing.dxf");
+    await settle(page);
+    const dxf = await page.evaluate(() => {
+      const entry = window.__gf.library[window.__gf.library.length - 1];
+      const r = entry?.result;
+      return {
+        kind: r?.kind,
+        format: r?.format,
+        pages: r?.kind === "blueprint" ? r.pages.length : 0,
+        w: r?.kind === "blueprint" ? r.pages[0].width : 0,
+        h: r?.kind === "blueprint" ? r.pages[0].height : 0,
+        note: r?.kind === "blueprint" ? (r.pages[0].sourceNote ?? "") : "",
+        mode: window.__gf.modes.mode,
+      };
+    });
+    check("DXF loads as a 2D blueprint, not a 3D solid",
+      dxf.kind === "blueprint" && dxf.format === "dxf", `${dxf.kind}/${dxf.format}`);
+    check("DXF renders real line work to a canvas", dxf.w > 200 && dxf.h > 100, `${dxf.w}×${dxf.h}`);
+    check("DXF reports which entities it drew", /Rendered/.test(dxf.note), dxf.note);
+    check("DXF opens the blueprint reference mode", dxf.mode === "blueprint", dxf.mode);
 
     /* ───────── blueprints ───────── */
     section("Blueprint rendering and assisted reconstruction");
@@ -727,6 +807,159 @@ async function run() {
     });
     check("aircraft context: peace sign still switches aircraft (preserved)",
       peaceAircraft.after !== peaceAircraft.before, `${peaceAircraft.before} → ${peaceAircraft.after}`);
+
+    /* ───────── hand-only recognition architecture (§A) ───────── */
+    section("Hand-only recognition architecture");
+
+    // The shipped bundle must not contain any face / pose / object model or the
+    // MediaPipe APIs that would load one.
+    const bundleAudit = await page.evaluate(async () => {
+      const html = await (await fetch("./")).text();
+      const srcs = [...html.matchAll(/src="([^"]+\.js)"/g)].map((m) => m[1]);
+      let joined = "";
+      for (const s of srcs) {
+        try {
+          joined += await (await fetch(s)).text();
+        } catch { /* ignore */ }
+      }
+      // @mediapipe/tasks-vision ships ONE monolithic bundle containing every
+      // vision task, so the class names are unavoidably present as dead code.
+      // What matters is that none of them is ever INSTANTIATED — so we assert on
+      // the construction calls, which is what would actually load a model.
+      const instantiations = [
+        "FaceLandmarker.createFrom", "FaceDetector.createFrom", "FaceStylizer.createFrom",
+        "PoseLandmarker.createFrom", "ObjectDetector.createFrom", "ImageSegmenter.createFrom",
+        "HolisticLandmarker.createFrom", "GestureRecognizer.createFrom",
+        "new FaceLandmarker", "new PoseLandmarker", "new ObjectDetector",
+      ];
+      return {
+        bytes: joined.length,
+        instantiated: instantiations.filter((b) => joined.includes(b)),
+        // Minification renames classes, so a name match is unreliable here;
+        // the model ASSET path survives minification and is the real proof.
+        handModelPath: joined.includes("models/hand_landmarker.task"),
+        // MediaPipe's own bundle contains default asset names for every task
+        // as dead strings. What we can assert is that no NON-HAND model is
+        // wired to our own asset directory, which is the only place this app
+        // ever loads a model from.
+        otherModelPaths: [
+          "models/face_landmarker", "models/face_detector",
+          "models/pose_landmarker", "models/efficientdet",
+          "models/selfie_segmenter", "models/gesture_recognizer",
+          "models/holistic_landmarker",
+        ].filter((m) => joined.includes(m)),
+      };
+    });
+    check("the bundle actually loaded for auditing", bundleAudit.bytes > 10000, `${bundleAudit.bytes} bytes`);
+    check("no face / pose / object / segmentation model is ever instantiated",
+      bundleAudit.instantiated.length === 0, bundleAudit.instantiated.join(", "));
+    check("the app points at the hand_landmarker model asset", bundleAudit.handModelPath);
+    check("no non-hand model is wired to the app's own asset directory",
+      bundleAudit.otherModelPaths.length === 0, bundleAudit.otherModelPaths.join(", "));
+
+    const modelAudit = await page.evaluate(() => {
+      // Only the hand model asset may be fetched.
+      const assets = performance.getEntriesByType("resource").map((r) => r.name);
+      const models = assets.filter((a) => /\.task(\?|$)/.test(a));
+      return {
+        models: models.map((m) => m.split("/").pop()),
+        nonHand: models.filter((m) => !/hand_landmarker/.test(m)),
+      };
+    });
+    check("only the hand_landmarker model asset is ever requested",
+      modelAudit.nonHand.length === 0, `non-hand models: ${modelAudit.nonHand.join(", ") || "none"}`);
+
+    // No hands in frame => absolutely no action, no matter what else moves.
+    await page.evaluate(() => {
+      window.__gf.modes.set("exterior");
+      window.__gf.exploded.setAmount(0);
+      window.__gf.engine.setExplode(0);
+      window.__gf.selection.setSelected(null);
+    });
+    const noHand = await page.evaluate(async () => {
+      const before = {
+        explode: window.__gf.exploded.targetAmount,
+        engine: window.__gf.engine.explodeTargetAmount,
+        yaw: window.__gf.scene.orbitState.yaw,
+        dist: window.__gf.scene.orbitState.dist,
+        selected: window.__gf.selection.selectedId,
+        aircraft: document.getElementById("aircraft-name").textContent,
+        mode: window.__gf.modes.mode,
+      };
+      // 120 frames of "a face, a body, a moving object, a busy background" —
+      // which all reach the app as exactly this: zero hand landmarks.
+      for (let i = 0; i < 120; i++) {
+        window.__gf.gestures.process([], performance.now() + i * 16);
+        await new Promise((r) => requestAnimationFrame(r));
+      }
+      const after = {
+        explode: window.__gf.exploded.targetAmount,
+        engine: window.__gf.engine.explodeTargetAmount,
+        yaw: window.__gf.scene.orbitState.yaw,
+        dist: window.__gf.scene.orbitState.dist,
+        selected: window.__gf.selection.selectedId,
+        aircraft: document.getElementById("aircraft-name").textContent,
+        mode: window.__gf.modes.mode,
+      };
+      return {
+        before, after,
+        gesture: document.getElementById("gesture-name").textContent,
+        status: document.getElementById("track-status").textContent,
+        hands: document.getElementById("stat-hands").textContent,
+      };
+    });
+    check("no hand => the aircraft never explodes", noHand.after.explode === noHand.before.explode);
+    check("no hand => the engine never explodes", noHand.after.engine === noHand.before.engine);
+    check("no hand => the camera never rotates", noHand.after.yaw === noHand.before.yaw);
+    check("no hand => the camera never zooms", noHand.after.dist === noHand.before.dist);
+    check("no hand => nothing is ever selected", noHand.after.selected === noHand.before.selected);
+    check("no hand => the aircraft never switches", noHand.after.aircraft === noHand.before.aircraft);
+    check("no hand => the exploration mode never changes", noHand.after.mode === noHand.before.mode);
+    check("no hand => the gesture reads None", /none/i.test(noHand.gesture), noHand.gesture);
+    check("no hand => hand count reads 0", noHand.hands === "0", noHand.hands);
+
+    // Low-confidence landmark noise must also be ignored.
+    const noise = await page.evaluate(async () => {
+      const before = window.__gf.exploded.targetAmount;
+      for (let i = 0; i < 60; i++) {
+        const random = Array.from({ length: 21 }, () => ({
+          x: Math.random(), y: Math.random(), z: 0,
+        }));
+        window.__gf.gestures.process(
+          [{ landmarks: random, handedness: "Unknown", score: 0.1 }],
+          performance.now() + i * 16,
+        );
+        await new Promise((r) => requestAnimationFrame(r));
+      }
+      return { before, after: window.__gf.exploded.targetAmount };
+    });
+    check("random landmark noise does not explode the aircraft",
+      Math.abs(noise.after - noise.before) < 0.05,
+      `${noise.before.toFixed(2)} → ${noise.after.toFixed(2)}`);
+
+    // Blueprint mode must not let gestures drive the aircraft (§D).
+    const bpGuard = await page.evaluate(async () => {
+      if (!window.__gf.modes.isAvailable("blueprint")) return { skipped: true };
+      window.__gf.modes.set("blueprint");
+      window.__gf.exploded.setAmount(0);
+      const before = window.__gf.exploded.targetAmount;
+      const lms = window.__testPoses?.POSES?.openPalm?.();
+      if (!lms) return { skipped: true };
+      for (let i = 0; i < 14; i++) {
+        window.__gf.gestures.process(
+          [{ landmarks: lms, handedness: "Right", score: 0.95 }],
+          performance.now() + i * 33,
+        );
+        await new Promise((r) => requestAnimationFrame(r));
+      }
+      return { skipped: false, before, after: window.__gf.exploded.targetAmount };
+    });
+    if (!bpGuard.skipped) {
+      check("blueprint mode: gestures do not trigger aircraft controls",
+        bpGuard.after === bpGuard.before,
+        `${bpGuard.before} → ${bpGuard.after}`);
+    }
+    await page.evaluate(() => window.__gf.modes.set("exterior"));
 
     /* ───────── camera during processing ───────── */
     section("Camera and memory");
