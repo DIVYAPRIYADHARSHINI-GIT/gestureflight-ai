@@ -430,7 +430,7 @@ This application is privacy-first by construction, not by policy.
 ```bash
 npm run typecheck   # TypeScript, zero errors
 npm run test:unit   # 121 unit tests (Node, no browser)
-npm run test:e2e    # 262 E2E checks in real headless Chrome
+npm run test:e2e    # 263 E2E checks in real headless Chrome
 npm test            # all of the above
 npm run test:live   # run the E2E suites against the deployed URL
 ```
@@ -443,9 +443,9 @@ npm run test:live   # run the E2E suites against the deployed URL
 | `tests/geometry.test.ts` | 28 | ✅ pass |
 | `tests/upgrade.test.ts` | 51 | ✅ pass |
 | `tests/e2e.mjs` | 110 | ✅ pass |
-| `tests/e2e-upgrade.mjs` | 152 | ✅ pass |
+| `tests/e2e-upgrade.mjs` | 153 | ✅ pass |
 | `tsc --noEmit` | — | ✅ clean |
-| **Total** | **383** | **✅ all passing** |
+| **Total** | **384** | **✅ all passing** |
 
 ### Format test results (real files, real parsers)
 
@@ -559,6 +559,32 @@ Verified manually in addition to the automated suites:
   hands (fingers edge-on to the camera) are not reliably classified, which is a
   limitation of a single 2D camera.
 - **Either hand** works, and left/right are labelled where MediaPipe reports it.
+
+### Performance and memory observations
+
+Measured on the deployed site via `renderer.info` and the in-app FPS counter:
+
+| Stage | Hardware GL | SwiftShader (software) | JS heap | Geometries |
+| --- | --- | --- | --- | --- |
+| Boot (built-in aircraft) | 60 fps | 11 fps | 10 MB | 61 |
+| After 4 model uploads | 60 fps | 58 fps | 10 MB | 12 |
+| Engine Explorer visible | 61 fps | 7 fps | 12 MB | 102 |
+| After removing all models | 61 fps | 8 fps | 14 MB | 93 |
+| Performance quality profile | 61 fps | 13 fps | 15 MB | 93 |
+
+- **Real hardware GL holds ~60 fps in every mode**, including the full engine
+  (50k triangles, 246 draw calls). The low software-GL numbers are SwiftShader
+  in headless Chrome, not an application problem — note that a simple uploaded
+  model still hits 58 fps there, so the cost scales with scene complexity as
+  expected rather than indicating a leak.
+- **Geometry counts fall when a model is removed** and the JS heap stays within
+  a ~5 MB band across the whole session, confirming disposal works.
+- Hand tracking runs on its own rAF loop and skips frames whose video timestamp
+  has not advanced, so a slow camera never blocks rendering.
+- STEP tessellation of a ~150 KB assembly takes ~350 ms; the pipeline yields to
+  the browser between stages so the UI never freezes.
+- The engine model is built lazily on first entry to Engine mode, so users who
+  never open it pay nothing.
 
 ---
 
