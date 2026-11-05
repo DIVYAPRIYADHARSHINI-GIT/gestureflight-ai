@@ -23,6 +23,12 @@ export class ExplodedViewController {
   private isolateAmount = 0;
   private isolateTarget = 0;
   private radius = 10;
+  /**
+   * Ids whose transform is currently owned by manual manipulation
+   * (extraction / inspection). The exploded view leaves these alone so the two
+   * systems cannot fight over the same object every frame.
+   */
+  private manualOverrides = new Set<string>();
 
   setModel(components: Map<string, ComponentNode>, radius: number): void {
     this.components = components;
@@ -78,6 +84,21 @@ export class ExplodedViewController {
     }
   }
 
+  /** Hands a component over to manual control, or takes it back. */
+  setManualOverride(id: string, manual: boolean): void {
+    if (manual) this.manualOverrides.add(id);
+    else this.manualOverrides.delete(id);
+  }
+
+  clearManualOverrides(): void {
+    this.manualOverrides.clear();
+    this.apply();
+  }
+
+  get manualIds(): string[] {
+    return [...this.manualOverrides];
+  }
+
   /** True once the model is within a hair of fully assembled. */
   get isAssembled(): boolean {
     return this.current < 0.015 && this.target === 0;
@@ -88,6 +109,11 @@ export class ExplodedViewController {
     const tmp = new THREE.Vector3();
 
     for (const node of this.components.values()) {
+      // A part the user has manually extracted or is inspecting is OWNED by
+      // PartManager. The exploded view must not fight it for the transform,
+      // or manual placement would be overwritten every frame.
+      if (this.manualOverrides.has(node.id)) continue;
+
       const scale = this.explodeScaleFor(node.id);
       tmp.copy(node.explodeDir).multiplyScalar(this.current * travel * scale);
 

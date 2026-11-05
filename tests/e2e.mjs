@@ -200,7 +200,8 @@ async function run() {
       ["left control panel", ".panel--left"],
       ["centre workspace", ".stage"],
       ["right information panel", ".panel--right"],
-      ["bottom aircraft selector", ".selector"],
+      ["bottom control panel", ".bottombar"],
+      ["bottom aircraft selector", "#aircraft-rail"],
       ["webcam preview", "#webcam"],
       ["landmark overlay canvas", "#overlay"],
     ]) {

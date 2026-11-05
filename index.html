@@ -138,6 +138,34 @@
             </label>
           </section>
 
+          <!-- Measurement tools (added by the simulator upgrade) -->
+          <section class="panel__block" id="measure-block">
+            <h2 class="panel__title">Measurement Tools</h2>
+            <label class="toggle">
+              <input type="checkbox" id="toggle-measure" />
+              <span>Measurement mode</span>
+            </label>
+            <p class="panel__hint">Click two points on the model — or point and pinch — to measure between them.</p>
+            <div class="measure">
+              <div class="measure__row">
+                <span class="measure__k">Distance</span>
+                <span class="measure__v" id="measure-distance">—</span>
+              </div>
+              <div class="measure__row">
+                <span class="measure__k">Points set</span>
+                <span class="measure__v" id="measure-points">0 / 2</span>
+              </div>
+            </div>
+            <div class="unitrow" id="unit-rail"></div>
+            <p class="disclaimer" id="measure-warning" hidden></p>
+            <h3 class="panel__subtitle">Selected component size</h3>
+            <dl class="spec" id="measure-bbox"></dl>
+            <div class="btnrow">
+              <button class="btn" id="btn-measure-component">Measure Selected</button>
+              <button class="btn btn--ghost" id="btn-measure-clear">Clear</button>
+            </div>
+          </section>
+
           <section class="panel__block">
             <h2 class="panel__title">Manual Controls</h2>
             <p class="panel__hint">Fallback when the camera is unavailable. Drag the 3D view, scroll to zoom, or use the keys below.</p>
@@ -166,6 +194,8 @@
             <span class="chip" id="hud-explode">Assembled</span>
             <span class="chip chip--mode" id="hud-exploration">Aircraft Exterior</span>
             <span class="chip chip--source" id="hud-source">Illustrative geometry</span>
+            <span class="chip chip--state" id="hud-state">Ready</span>
+            <span class="chip chip--attitude" id="hud-attitude" hidden>Y 0° P 0° R 0°</span>
           </div>
           <div class="stage__drop" id="stage-drop" hidden>
             <div class="stage__dropinner">
@@ -220,6 +250,47 @@
             <ul class="complist" id="component-list"></ul>
           </section>
 
+          <!-- X-Ray + multi-part manipulation (simulator upgrade) -->
+          <section class="panel__block" id="xray-block">
+            <h2 class="panel__title">X-Ray &amp; Internal View</h2>
+            <label class="toggle">
+              <input type="checkbox" id="toggle-xray" />
+              <span>X-Ray mode</span>
+            </label>
+            <label class="slider">
+              <span class="slider__label">Shell transparency <b id="val-xray">22%</b></span>
+              <input type="range" id="xray-slider" min="2" max="95" value="22" />
+            </label>
+            <p class="panel__hint" id="xray-stats">—</p>
+            <div class="btnrow">
+              <button class="btn btn--ghost" id="btn-xray-reset">Reset Appearance</button>
+            </div>
+          </section>
+
+          <section class="panel__block" id="multi-block">
+            <h2 class="panel__title">Multi-Part Manipulation</h2>
+            <p class="panel__hint" id="multi-count">No components selected</p>
+            <div class="btnrow">
+              <button class="btn" id="btn-select-all">Select All</button>
+              <button class="btn" id="btn-deselect-all">Deselect All</button>
+            </div>
+            <div class="btnrow">
+              <button class="btn" id="btn-extract-selected">Extract Selected</button>
+              <button class="btn" id="btn-restore-selected">Restore Selected</button>
+            </div>
+            <h3 class="panel__subtitle">360° Inspection</h3>
+            <p class="panel__hint">Rotate an extracted part with a loose hand, or use the keys below.</p>
+            <div class="dpad">
+              <button class="btn btn--sq" data-inspect="up" title="Tilt up">▲</button>
+              <div class="dpad__mid">
+                <button class="btn btn--sq" data-inspect="left" title="Rotate left">◀</button>
+                <button class="btn btn--sq" data-inspect="reset" title="Reset pose">⟲</button>
+                <button class="btn btn--sq" data-inspect="right" title="Rotate right">▶</button>
+              </div>
+              <button class="btn btn--sq" data-inspect="down" title="Tilt down">▼</button>
+            </div>
+          </section>
+
           <!-- Engine Explorer (added by the upload/engine upgrade) -->
           <section class="panel__block" id="engine-block">
             <h2 class="panel__title">Engine Explorer</h2>
@@ -260,10 +331,40 @@
         </aside>
       </main>
 
-      <!-- ───────────────────── BOTTOM AIRCRAFT SELECTOR ───────────────────── -->
-      <footer class="selector glass" aria-label="Aircraft selector">
+      <!-- ───────────────────── BOTTOM CONTROL PANEL ───────────────────── -->
+      <footer class="bottombar glass">
+        <!-- Every button here maps to a real action (§20: no placeholders) -->
+        <div class="actionbar" aria-label="Gesture actions">
+          <button class="actionbtn" data-action="explode" title="Open Palm">
+            <span class="actionbtn__g">✋</span><span class="actionbtn__t">Explode</span>
+          </button>
+          <button class="actionbtn" data-action="assemble" title="Closed Fist">
+            <span class="actionbtn__g">✊</span><span class="actionbtn__t">Assemble</span>
+          </button>
+          <button class="actionbtn" data-action="flight" title="Half-closed hand">
+            <span class="actionbtn__g">🤏</span><span class="actionbtn__t">Flight</span>
+          </button>
+          <button class="actionbtn" data-action="extract" title="Pinch">
+            <span class="actionbtn__g">🤌</span><span class="actionbtn__t">Extract</span>
+          </button>
+          <button class="actionbtn" data-action="select" title="Index finger">
+            <span class="actionbtn__g">☝</span><span class="actionbtn__t">Select</span>
+          </button>
+          <button class="actionbtn" data-action="xray" title="X-Ray mode">
+            <span class="actionbtn__g">◍</span><span class="actionbtn__t">X-Ray</span>
+          </button>
+          <button class="actionbtn" data-action="undo" title="Undo (Ctrl/Cmd+Z)" disabled>
+            <span class="actionbtn__g">↶</span><span class="actionbtn__t">Undo</span>
+          </button>
+          <button class="actionbtn" data-action="redo" title="Redo (Ctrl/Cmd+Shift+Z)" disabled>
+            <span class="actionbtn__g">↷</span><span class="actionbtn__t">Redo</span>
+          </button>
+          <button class="actionbtn" data-action="reset" title="Reset everything">
+            <span class="actionbtn__g">⟲</span><span class="actionbtn__t">Reset</span>
+          </button>
+        </div>
         <div class="selector__rail" id="aircraft-rail"></div>
-        <p class="selector__hint">Peace sign ✌ switches to the next aircraft</p>
+        <p class="selector__hint">Peace sign ✌ switches aircraft · ✌ in engine mode switches view</p>
       </footer>
 
       <!-- ───────────────────────── OVERLAY VIEWS ───────────────────────── -->

@@ -46,6 +46,14 @@ import {
 } from "./modules/ExplorationModes";
 import { UploadPanel, type LibraryEntry } from "./modules/UploadPanel";
 
+/* ── engineering-simulator upgrade ── */
+import { FlightController } from "./modules/FlightController";
+import { HistoryManager, type HistoryState } from "./modules/HistoryManager";
+import { InteractionStateManager } from "./modules/InteractionState";
+import { MeasurementTool, type MeasurementUnit } from "./modules/MeasurementTool";
+import { PartManager } from "./modules/PartManager";
+import { XRayMode } from "./modules/XRayMode";
+
 const $ = <T extends HTMLElement = HTMLElement>(id: string): T =>
   document.getElementById(id) as T;
 
@@ -87,6 +95,15 @@ class App {
   private busy = false;
   /** The spec currently built — may be a reconstructed one, not just a built-in. */
   private activeSpec: (typeof AIRCRAFT)[number] | null = null;
+
+  /* ── engineering-simulator upgrade ── */
+  private parts = new PartManager();
+  private xray = new XRayMode();
+  private measure = new MeasurementTool();
+  private flight = new FlightController();
+  private interaction = new InteractionStateManager();
+  private history!: HistoryManager;
+  private measureMode = false;
   /** Holds a momentary gesture label visible for a moment after it fires. */
   private momentaryUntil = 0;
 
@@ -127,12 +144,35 @@ class App {
             this.syncExplodeUi();
           }
         },
-        orbit: (dy, dp) => this.scene.orbit(dy, dp),
-        setRoll: (r) => this.scene.setRoll(r),
+        orbit: (dy, dp) => {
+          // Half-closed hand drives the AIRCRAFT in flight mode (§4C), and the
+          // camera otherwise. The state machine decides, so the two can never
+          // both consume the same hand movement.
+          if (this.interaction.current === "AIRCRAFT_CONTROL") {
+            if (!this.interaction.admits("flyAircraft")) return;
+            this.flight.nudge("yaw", dy);
+            this.flight.nudge("pitch", dp);
+            this.history.push("Flight control", "flight");
+          } else if (this.interaction.admits("orbitCamera")) {
+            this.scene.orbit(dy, dp);
+          }
+        },
+        setRoll: (r) => {
+          if (this.interaction.current === "AIRCRAFT_CONTROL") {
+            this.flight.nudge("roll", (r - this.flight.targetAttitude.roll) * 0.35);
+          } else {
+            this.scene.setRoll(r);
+          }
+        },
         setZoom: (t) => this.scene.setZoomNormalised(t),
         point: (nx, ny) => {
           this.pointerTarget = nx === null || ny === undefined ? null : { nx, ny };
           this.scene.setCursor(nx, ny);
+        },
+        measureAt: (nx, ny) => {
+          if (!this.measureMode) return;
+          if (!this.interaction.tryAction("measurePoint", 900)) return;
+          this.addMeasurePoint(nx, ny);
         },
         pinchSelected: () => this.handlePinch(),
         nextAircraft: () => this.handlePeace(),
@@ -146,6 +186,7 @@ class App {
 
     this.bindUi();
     this.bindUpgrade();
+    this.bindSimulator();
     this.applySettings();
     void this.loadAircraft(0, true);
     this.startLoop();
@@ -206,6 +247,7 @@ class App {
     this.renderRail();
     this.syncExplodeUi();
     this.updateProvenance();
+    this.rebuildParts();
     $("loading").hidden = true;
     this.switching = false;
 
@@ -228,6 +270,15 @@ class App {
   private startLoop(): void {
     this.scene.start((dt) => {
       this.clock += dt;
+      // Aircraft attitude (§4C) is applied to the model root, independent of
+      // the camera so flight control and orbit never fight.
+      const flightTarget = this.importedMesh?.root ?? this.built?.root ?? null;
+      this.flight.apply(dt, flightTarget);
+      if (this.interaction.current === "AIRCRAFT_CONTROL") {
+        const a = this.flight.attitudeDegrees;
+        $("hud-attitude").textContent =
+          `Y ${a.yaw.toFixed(0)}° P ${a.pitch.toFixed(0)}° R ${a.roll.toFixed(0)}°`;
+      }
       this.exploded.update(dt);
       this.selection.update(dt);
       this.engine.update(dt, this.clock);
@@ -303,6 +354,7 @@ class App {
     $("val-openness").textContent = `${open}%`;
     ($("bar-openness") as HTMLProgressElement).value = open;
 
+    $("hud-state").textContent = this.interaction.label;
     $("stat-hands").textContent = String(s.hands);
     $("stat-sides").textContent = s.sides;
 
@@ -489,15 +541,38 @@ class App {
       dragging = false;
       vp.releasePointerCapture?.(e.pointerId);
       // A click (not a drag) picks a component.
-      if (moved < 5 && this.built) {
+      if (moved < 5) {
         const r = vp.getBoundingClientRect();
-        const hit = this.scene.pick(
-          (e.clientX - r.left) / r.width,
-          (e.clientY - r.top) / r.height,
-          this.selection.pickTargets,
-        );
-        const id = (hit?.object.userData.componentId as string | undefined) ?? null;
-        this.selectComponent(id);
+        const nx = (e.clientX - r.left) / r.width;
+        const ny = (e.clientY - r.top) / r.height;
+
+        // Measurement mode consumes the click (§10).
+        if (this.measureMode) {
+          this.addMeasurePoint(nx, ny);
+          return;
+        }
+
+        // Prefer the unified part registry so imported CAD, engine parts and
+        // built-in components all respond to the same click path.
+        const partHit = this.scene.pick(nx, ny, this.parts.pickTargets);
+        const partId = (partHit?.object.userData.partId as string | undefined) ?? null;
+        if (partId) {
+          // Shift-click adds to the selection (§8 multi-select via mouse).
+          if (e.shiftKey) this.parts.addToSelection(partId);
+          else this.parts.select(partId);
+          this.interaction.set(
+            this.parts.selectedIds.length > 1 ? "MULTI_PART_SELECT" : "COMPONENT_SELECT",
+          );
+          this.history.push("Select component");
+        }
+
+        if (this.built && !this.importedMesh) {
+          const hit = this.scene.pick(nx, ny, this.selection.pickTargets);
+          const id = (hit?.object.userData.componentId as string | undefined) ?? null;
+          this.selectComponent(id);
+        } else if (this.importedMesh && partId) {
+          this.selectImportedPart(partId);
+        }
       }
     };
     vp.addEventListener("pointerup", endDrag);
@@ -1037,6 +1112,7 @@ class App {
     this.renderImportedInfo(mesh);
     this.renderImportedComponentList(mesh);
     this.updateProvenance();
+    this.rebuildParts();
     if (this.modes.mode !== "exterior") this.modes.set("exterior");
     this.toast(`${mesh.format.toUpperCase()} loaded — ${UploadPanel.describeMesh(mesh)}`);
   }
@@ -1387,6 +1463,512 @@ class App {
     node?.group.position.add(delta);
   }
 
+  /* ═══════════════ engineering simulator (upgrade) ═══════════════ */
+
+  /** Wires the simulator panels: X-Ray, multi-part, measurement, actions. */
+  private bindSimulator(): void {
+    this.scene.scene.add(this.measure.overlay);
+
+    // History captures/restores the whole manipulable world state (§11).
+    this.history = new HistoryManager(
+      () => this.captureState(),
+      (s) => this.restoreState(s),
+    );
+    this.history.onChange(() => this.syncHistoryUi());
+
+    this.interaction.onChange((s) => {
+      $("hud-state").textContent = this.interaction.label;
+      void s;
+    });
+    this.parts.onChange(() => this.syncPartsUi());
+    // Hand the transform over so the exploded view stops writing to a part the
+    // user is manipulating, and takes it back when the part is restored.
+    this.parts.onOwnershipChange = (id, manual) => this.exploded.setManualOverride(id, manual);
+
+    /* ── X-Ray ── */
+    const xrayToggle = $<HTMLInputElement>("toggle-xray");
+    xrayToggle.addEventListener("change", () => this.setXray(xrayToggle.checked));
+    const xraySlider = $<HTMLInputElement>("xray-slider");
+    xraySlider.addEventListener("input", () => {
+      const v = Number(xraySlider.value) / 100;
+      this.xray.setOpacity(v);
+      $("val-xray").textContent = `${Math.round(v * 100)}%`;
+    });
+    xraySlider.addEventListener("change", () => this.history.push("X-Ray transparency"));
+    $("btn-xray-reset").addEventListener("click", () => {
+      this.setXray(false);
+      this.parts.showAll();
+      this.history.push("Reset appearance");
+      this.toast("Appearance reset — original materials restored");
+    });
+
+    /* ── multi-part ── */
+    $("btn-select-all").addEventListener("click", () => {
+      this.parts.selectAll();
+      this.interaction.set("MULTI_PART_SELECT");
+      this.history.push("Select all");
+      this.toast(`${this.parts.selectedIds.length} components selected`);
+    });
+    $("btn-deselect-all").addEventListener("click", () => {
+      this.parts.deselectAll();
+      this.interaction.set("IDLE");
+      this.history.push("Deselect all");
+    });
+    $("btn-extract-selected").addEventListener("click", () => this.extractSelected());
+    $("btn-restore-selected").addEventListener("click", () => {
+      const n = this.parts.restoreSelected();
+      this.history.push("Restore selected");
+      this.toast(n ? `${n} component(s) restored to their original positions` : "Nothing to restore");
+    });
+
+    /* ── 360° inspection ── */
+    document.querySelectorAll<HTMLButtonElement>("[data-inspect]").forEach((b) => {
+      b.addEventListener("click", () => this.inspectNudge(b.dataset.inspect!));
+    });
+
+    /* ── measurement ── */
+    const mToggle = $<HTMLInputElement>("toggle-measure");
+    mToggle.addEventListener("change", () => {
+      this.measureMode = mToggle.checked;
+      this.interaction.set(this.measureMode ? "MEASUREMENT" : "IDLE");
+      if (!this.measureMode) this.measure.clear();
+      this.syncMeasureUi();
+      this.toast(
+        this.measureMode
+          ? "Measurement mode — click two points on the model"
+          : "Measurement mode off",
+      );
+    });
+    const unitRail = $("unit-rail");
+    for (const u of ["mm", "cm", "m"] as MeasurementUnit[]) {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.textContent = u;
+      b.dataset.unit = u;
+      b.addEventListener("click", () => {
+        this.measure.setUnit(u);
+        this.syncMeasureUi();
+      });
+      unitRail.append(b);
+    }
+    $("btn-measure-component").addEventListener("click", () => this.measureSelected());
+    $("btn-measure-clear").addEventListener("click", () => {
+      this.measure.clear();
+      this.syncMeasureUi();
+    });
+
+    /* ── bottom action bar: every button does real work (§20) ── */
+    document.querySelectorAll<HTMLButtonElement>("[data-action]").forEach((b) => {
+      b.addEventListener("click", () => this.runAction(b.dataset.action!));
+    });
+
+    /* ── keyboard: undo/redo (§11) ── */
+    window.addEventListener("keydown", (e) => {
+      if (e.target instanceof HTMLInputElement) return;
+      const meta = e.metaKey || e.ctrlKey;
+      if (meta && e.key.toLowerCase() === "z") {
+        e.preventDefault();
+        if (e.shiftKey) this.runAction("redo");
+        else this.runAction("undo");
+      }
+      if (meta && e.key.toLowerCase() === "y") {
+        e.preventDefault();
+        this.runAction("redo");
+      }
+      if (!meta && e.key.toLowerCase() === "x") this.runAction("xray");
+      if (!meta && e.key.toLowerCase() === "m") {
+        $<HTMLInputElement>("toggle-measure").click();
+      }
+    });
+
+    this.syncMeasureUi();
+    this.syncPartsUi();
+  }
+
+  /** Central dispatcher for the action bar, so gestures and buttons agree. */
+  private runAction(action: string): void {
+    const pulse = (name: string) => {
+      const btn = document.querySelector<HTMLElement>(`[data-action="${name}"]`);
+      if (!btn) return;
+      btn.classList.remove("is-fired");
+      void btn.offsetWidth; // restart the animation
+      btn.classList.add("is-fired");
+    };
+
+    switch (action) {
+      case "explode":
+        if (this.modes.subject === "engine") {
+          this.engine.explode();
+          this.syncEngineUi();
+        } else {
+          this.exploded.explode();
+          this.syncExplodeUi();
+        }
+        this.interaction.set("AIRCRAFT_EXPLODE");
+        this.sound.explode();
+        this.history.push("Explode");
+        pulse("explode");
+        break;
+
+      case "assemble":
+        if (this.modes.subject === "engine") {
+          this.engine.assemble();
+          this.syncEngineUi();
+        } else {
+          this.exploded.assemble();
+          this.exploded.isolate(null);
+          this.syncExplodeUi();
+        }
+        this.parts.restoreAll();
+        this.exploded.clearManualOverrides();
+        this.flight.level();
+        this.interaction.set("AIRCRAFT_ASSEMBLE");
+        this.sound.assemble();
+        this.history.push("Assemble");
+        pulse("assemble");
+        break;
+
+      case "flight": {
+        const on = this.interaction.current !== "AIRCRAFT_CONTROL";
+        this.interaction.set(on ? "AIRCRAFT_CONTROL" : "IDLE");
+        $("hud-attitude").hidden = !on;
+        document.querySelector('[data-action="flight"]')?.classList.toggle("is-active", on);
+        this.toast(
+          on
+            ? "Flight control — hold a loose hand and move it, or use W/A/S/D and Q/E for roll"
+            : "Flight control off",
+        );
+        break;
+      }
+
+      case "extract":
+        this.extractSelected();
+        pulse("extract");
+        break;
+
+      case "select":
+        this.interaction.set("COMPONENT_SELECT");
+        this.toast("Selection mode — point at a part, or click it in the 3D view");
+        pulse("select");
+        break;
+
+      case "xray":
+        this.setXray(!this.xray.isEnabled);
+        pulse("xray");
+        break;
+
+      case "undo": {
+        const label = this.history.undo();
+        if (label) {
+          this.toast(`Undone: ${label}`);
+          pulse("undo");
+        } else this.toast("Nothing to undo");
+        break;
+      }
+
+      case "redo": {
+        const label = this.history.redo();
+        if (label) {
+          this.toast(`Redone: ${label}`);
+          pulse("redo");
+        } else this.toast("Nothing to redo");
+        break;
+      }
+
+      case "reset":
+        this.parts.restoreAll();
+        this.exploded.clearManualOverrides();
+        this.setXray(false);
+        this.measure.clear();
+        this.flight.level();
+        this.exploded.assemble();
+        this.exploded.isolate(null);
+        this.engine.reset();
+        this.scene.resetView();
+        this.parts.deselectAll();
+        this.interaction.reset();
+        this.syncExplodeUi();
+        this.syncEngineUi();
+        this.syncMeasureUi();
+        this.history.push("Reset all");
+        this.toast("Everything reset to the original state");
+        pulse("reset");
+        break;
+    }
+  }
+
+  /* ───────── X-Ray ───────── */
+
+  private setXray(on: boolean): void {
+    if (on) {
+      // Classify geometrically from whatever is actually loaded (§7).
+      const entries = this.parts.all.map((p) => ({ id: p.id, object: p.object }));
+      if (entries.length === 0) {
+        this.toast("Load a model first — X-Ray needs geometry to see through");
+        $<HTMLInputElement>("toggle-xray").checked = false;
+        return;
+      }
+      this.xray.setTargets(XRayMode.classifyShells(entries));
+      this.xray.enable();
+      this.interaction.set("X_RAY");
+      const s = this.xray.stats;
+      $("xray-stats").textContent =
+        s.internals > 0
+          ? `${s.shells} outer shell(s) made transparent, revealing ${s.internals} internal component(s) that exist in this model.`
+          : `${s.shells} shell(s) made transparent. This model has no separate internal geometry, so the interior is empty — GestureFlight does not invent internal parts.`;
+      this.toast(
+        s.internals > 0
+          ? `X-Ray on — ${s.internals} internal component(s) visible`
+          : "X-Ray on — this model contains no internal geometry",
+      );
+    } else {
+      this.xray.disable();
+      if (this.interaction.current === "X_RAY") this.interaction.set("IDLE");
+      $("xray-stats").textContent = "—";
+      this.toast("X-Ray off — original materials restored");
+    }
+    $<HTMLInputElement>("toggle-xray").checked = on;
+    document.querySelector('[data-action="xray"]')?.classList.toggle("is-active", on);
+    this.history.push(on ? "X-Ray on" : "X-Ray off");
+  }
+
+  /* ───────── multi-part ───────── */
+
+  private extractSelected(): void {
+    if (this.parts.selectedIds.length === 0) {
+      this.toast("Select a component first — point at it, or click it");
+      return;
+    }
+    if (!this.interaction.tryAction("extract", 400)) return;
+    const radius = this.built?.radius ?? 10;
+    const n = this.parts.extractSelected(radius * 0.55);
+    this.interaction.set("COMPONENT_EXTRACT");
+    this.sound.select();
+    this.history.push(`Extract ${n} component(s)`);
+    this.toast(`${n} component(s) extracted — rotate to inspect, Restore to put them back`);
+  }
+
+  private inspectNudge(dir: string): void {
+    if (this.parts.selectedIds.length === 0) {
+      this.toast("Select a component to inspect it");
+      return;
+    }
+    const step = 0.26;
+    switch (dir) {
+      case "left": this.parts.rotateSelected(-step, 0); break;
+      case "right": this.parts.rotateSelected(step, 0); break;
+      case "up": this.parts.rotateSelected(0, -step); break;
+      case "down": this.parts.rotateSelected(0, step); break;
+      case "reset": this.parts.resetSelectedRotation(); break;
+    }
+    this.interaction.set("COMPONENT_INSPECT");
+    this.history.push("Rotate component", "inspect");
+  }
+
+  private syncPartsUi(): void {
+    const n = this.parts.selectedIds.length;
+    $("multi-count").textContent =
+      n === 0
+        ? "No components selected"
+        : `${n} component${n > 1 ? "s" : ""} selected${this.parts.extractedIds.length ? ` · ${this.parts.extractedIds.length} extracted` : ""}`;
+  }
+
+  /* ───────── measurement ───────── */
+
+  /** Adds a measurement point from a raycast hit (§10: real geometry). */
+  private addMeasurePoint(nx: number, ny: number): void {
+    const hit = this.scene.pick(nx, ny, this.parts.pickTargets);
+    if (!hit) {
+      this.toast("Point at the model surface to place a measurement point");
+      return;
+    }
+    const partId = (hit.object.userData.partId as string | undefined) ?? null;
+    const part = partId ? this.parts.get(partId) : undefined;
+    const count = this.measure.addPoint({
+      world: hit.point.clone(),
+      componentId: partId,
+      componentName: part?.name ?? null,
+    });
+    this.sound.select();
+    this.syncMeasureUi();
+    this.history.push(`Measurement point ${count}`);
+    if (count === 2) {
+      this.toast(`Distance: ${this.measure.format(this.measure.distance)}`);
+    }
+  }
+
+  private measureSelected(): void {
+    const sel = this.parts.selected;
+    if (sel.length === 0) {
+      this.toast("Select a component to measure it");
+      return;
+    }
+    if (sel.length >= 2) {
+      const d = this.measure.measureBetween(sel[0].object, sel[1].object);
+      const gap = this.measure.measureGap(sel[0].object, sel[1].object);
+      this.toast(
+        `${sel[0].name} → ${sel[1].name}: centres ${this.measure.format(d)}, gap ${this.measure.format(gap)}`,
+      );
+    }
+    const r = this.measure.measureObject(sel[0].object);
+    const dl = $("measure-bbox");
+    dl.replaceChildren();
+    for (const [k, v] of [
+      ["Component", sel[0].name],
+      ["Length (X)", this.measure.format(r.length)],
+      ["Height (Y)", this.measure.format(r.height)],
+      ["Width (Z)", this.measure.format(r.width)],
+      ["Diagonal", this.measure.format(r.diagonal)],
+    ] as Array<[string, string]>) {
+      const dt = document.createElement("dt");
+      dt.textContent = k;
+      const dd = document.createElement("dd");
+      dd.textContent = v;
+      dl.append(dt, dd);
+    }
+    this.syncMeasureUi();
+  }
+
+  private syncMeasureUi(): void {
+    $("measure-distance").textContent = this.measure.format(this.measure.distance);
+    $("measure-points").textContent = `${this.measure.pointCount} / 2`;
+    document.querySelectorAll<HTMLButtonElement>("#unit-rail button").forEach((b) => {
+      b.classList.toggle("is-active", b.dataset.unit === this.measure.currentUnit);
+    });
+    const warn = $("measure-warning");
+    if (!this.measure.isUnitKnown) {
+      warn.hidden = false;
+      warn.textContent =
+        "This model's real-world scale is not recorded by its file format, so measurements are in the file's own units treated as millimetres. Treat them as relative, not certified dimensions.";
+    } else {
+      warn.hidden = true;
+    }
+  }
+
+  /* ───────── history snapshots ───────── */
+
+  private captureState(): HistoryState {
+    const transforms: HistoryState["transforms"] = {};
+    for (const p of this.parts.all) {
+      transforms[p.id] = {
+        position: p.object.position.toArray() as [number, number, number],
+        rotation: [p.object.rotation.x, p.object.rotation.y, p.object.rotation.z],
+        scale: p.object.scale.toArray() as [number, number, number],
+        visible: !p.hidden,
+      };
+    }
+    return {
+      transforms,
+      flags: {
+        explodeAmount: this.exploded.targetAmount,
+        engineExplodeAmount: this.engine.isBuilt ? this.engine.explodeTargetAmount : 0,
+        xrayEnabled: this.xray.isEnabled,
+        xrayOpacity: this.xray.currentOpacity,
+        selectedIds: this.parts.selectedIds,
+        isolatedId: this.exploded.isolatedId,
+        hiddenIds: this.parts.hiddenIds,
+        measurementPoints: this.measure.endpoints.map(
+          (p) => p.world.toArray() as [number, number, number],
+        ),
+      },
+    };
+  }
+
+  private restoreState(s: HistoryState): void {
+    for (const [id, t] of Object.entries(s.transforms)) {
+      const part = this.parts.get(id);
+      if (!part) continue;
+      part.object.position.set(...t.position);
+      part.object.rotation.set(...t.rotation);
+      part.object.scale.set(...t.scale);
+      this.parts.setHidden(id, !t.visible);
+    }
+
+    this.exploded.setAmount(s.flags.explodeAmount);
+    this.exploded.isolate(s.flags.isolatedId);
+    if (this.engine.isBuilt) this.engine.setExplode(s.flags.engineExplodeAmount);
+
+    if (s.flags.xrayEnabled !== this.xray.isEnabled) {
+      if (s.flags.xrayEnabled) {
+        this.xray.setTargets(
+          XRayMode.classifyShells(this.parts.all.map((p) => ({ id: p.id, object: p.object }))),
+        );
+        this.xray.enable();
+      } else {
+        this.xray.disable();
+      }
+      $<HTMLInputElement>("toggle-xray").checked = s.flags.xrayEnabled;
+      document
+        .querySelector('[data-action="xray"]')
+        ?.classList.toggle("is-active", s.flags.xrayEnabled);
+    }
+    this.xray.setOpacity(s.flags.xrayOpacity);
+
+    // Selection is restored so undo returns the user to the same context.
+    this.parts.deselectAll();
+    for (const id of s.flags.selectedIds) this.parts.addToSelection(id);
+
+    this.syncExplodeUi();
+    this.syncEngineUi();
+    this.syncPartsUi();
+    this.syncMeasureUi();
+  }
+
+  private syncHistoryUi(): void {
+    const undo = document.querySelector<HTMLButtonElement>('[data-action="undo"]');
+    const redo = document.querySelector<HTMLButtonElement>('[data-action="redo"]');
+    if (undo) {
+      undo.disabled = !this.history.canUndo;
+      undo.title = this.history.canUndo
+        ? `Undo: ${this.history.undoLabel} (Ctrl/Cmd+Z)`
+        : "Nothing to undo";
+    }
+    if (redo) {
+      redo.disabled = !this.history.canRedo;
+      redo.title = this.history.canRedo
+        ? `Redo: ${this.history.redoLabel} (Ctrl/Cmd+Shift+Z)`
+        : "Nothing to redo";
+    }
+  }
+
+  /**
+   * Rebuilds the part registry after a model change, then reseeds history.
+   * This is what lets X-Ray, measurement and multi-select work identically for
+   * built-in aircraft, engine assemblies and imported CAD.
+   */
+  private rebuildParts(): void {
+    this.parts.clear();
+    this.xray.dispose();
+    this.measure.clear();
+
+    if (this.importedMesh) {
+      for (const [id, p] of this.importedParts) {
+        this.parts.register(id, p.name, "imported", p.object, p.namedInFile);
+      }
+      this.measure.configure(
+        this.importedMesh.root.scale.x || 1,
+        this.importedMesh.unitsKnown,
+      );
+    } else if (this.built) {
+      for (const [id, node] of this.built.components) {
+        this.parts.register(
+          id,
+          this.info.nameOf(this.spec.profile.kind, id),
+          "builtin",
+          node.group,
+          true,
+        );
+      }
+      // Built-in aircraft are authored in notional metres and the viewer scales
+      // them to fit, so the scale IS known for these.
+      this.measure.configure(this.built.root.scale.x || 1, true);
+    }
+
+    this.syncPartsUi();
+    this.syncMeasureUi();
+    this.history.reset("Model loaded");
+  }
+
   /** Read/drive handle used by the automated e2e suite. */
   testHandle(): unknown {
     const self = this;
@@ -1426,6 +2008,20 @@ class App {
         return self.quality;
       },
       handleFiles: (files: FileList | File[]) => self.handleFiles(files),
+      /* ── simulator upgrade ── */
+      parts: this.parts,
+      xray: this.xray,
+      measure: this.measure,
+      flight: this.flight,
+      interaction: this.interaction,
+      get history() {
+        return self.history;
+      },
+      get measureMode() {
+        return self.measureMode;
+      },
+      runAction: (a: string) => self.runAction(a),
+      addMeasurePoint: (nx: number, ny: number) => self.addMeasurePoint(nx, ny),
       selectEnginePart: (id: string) => self.selectEnginePart(id),
       stepComponent: (d: 1 | -1) => self.stepComponent(d),
     };

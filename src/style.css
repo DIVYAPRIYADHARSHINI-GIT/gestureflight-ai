@@ -598,6 +598,64 @@ input[type="range"]::-moz-range-thumb {
 .upload__convertfile { font-size: 10.5px; color: #f8e3bb; word-break: break-all; }
 .upload__convertnote { font-size: 11px; line-height: 1.55; color: #f8e3bb; }
 
+/* ═══════════════ simulator upgrade: measure / xray / multi / actions ═══════════════ */
+
+.measure { display: flex; flex-direction: column; gap: 5px; margin-bottom: 10px; }
+.measure__row {
+  display: flex; justify-content: space-between; align-items: baseline;
+  background: rgba(8, 16, 30, 0.6); border: 1px solid var(--line);
+  border-radius: 8px; padding: 7px 9px;
+}
+.measure__k { font-size: 10px; letter-spacing: .7px; text-transform: uppercase; color: var(--ink-mute); }
+.measure__v { font-family: var(--mono); font-size: 13px; color: var(--amber); }
+
+.unitrow { display: flex; gap: 4px; margin-bottom: 8px; }
+.unitrow button {
+  flex: 1; border: 1px solid var(--line); background: rgba(8,16,30,.55);
+  color: var(--ink-soft); border-radius: 7px; padding: 5px; font-size: 11px;
+  font-family: var(--mono); cursor: pointer; transition: all .15s; min-height: 30px;
+}
+.unitrow button:hover { border-color: var(--line-strong); color: var(--ink); }
+.unitrow button.is-active { border-color: var(--amber); color: var(--amber); background: rgba(243,178,60,.12); }
+
+.chip--state { color: var(--green); border-color: rgba(74,222,128,.45); }
+.chip--attitude { color: var(--amber); border-color: rgba(243,178,60,.45); font-family: var(--mono); }
+.chip[hidden] { display: none; }
+
+/* ───────────── bottom control panel ───────────── */
+.bottombar {
+  margin: 0 12px 12px; border-radius: var(--radius);
+  padding: 10px 12px; display: flex; flex-direction: column; gap: 10px;
+}
+.actionbar {
+  display: flex; gap: 6px; overflow-x: auto; padding-bottom: 2px;
+  scrollbar-width: thin;
+}
+.actionbtn {
+  flex: 1 0 auto; min-width: 74px;
+  display: flex; flex-direction: column; align-items: center; gap: 3px;
+  border: 1px solid var(--line); background: rgba(8, 16, 30, 0.55);
+  border-radius: var(--radius-sm); padding: 7px 8px; cursor: pointer;
+  transition: all .16s; color: var(--ink-soft);
+}
+.actionbtn:hover:not(:disabled) {
+  border-color: var(--line-strong); color: var(--ink);
+  background: rgba(56, 225, 240, 0.1); transform: translateY(-1px);
+}
+.actionbtn:disabled { opacity: .35; cursor: not-allowed; }
+.actionbtn.is-active { border-color: var(--cyan); color: var(--cyan); background: rgba(56,225,240,.14); }
+/* Pulses when the matching gesture fires, so gesture and button agree. */
+.actionbtn.is-fired { animation: actionPulse .5s ease; }
+@keyframes actionPulse {
+  0% { border-color: var(--green); box-shadow: 0 0 0 0 rgba(74,222,128,.5); }
+  100% { border-color: var(--line); box-shadow: 0 0 0 10px rgba(74,222,128,0); }
+}
+.actionbtn__g { font-size: 17px; line-height: 1; }
+.actionbtn__t { font-size: 9.5px; letter-spacing: .4px; white-space: nowrap; }
+
+.bottombar .selector__rail { display: flex; gap: 8px; overflow-x: auto; }
+.bottombar .selector__hint { margin: 0; font-size: 10px; color: var(--ink-mute); text-align: center; }
+
 /* ───────────── responsive ───────────── */
 @media (max-width: 1240px) {
   .layout { grid-template-columns: 286px 1fr 286px; }

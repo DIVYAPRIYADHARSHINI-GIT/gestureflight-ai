@@ -44,6 +44,8 @@ export interface GestureActions {
   dragIsolated?(dx: number, dy: number): void;
   /** Swipe steps through components or views. */
   step?(direction: 1 | -1): void;
+  /** Place a measurement point at the fingertip (§10). */
+  measureAt?(nx: number, ny: number): void;
 }
 
 export interface GestureState {
@@ -304,8 +306,15 @@ export class GestureController {
 
       case "pinch": {
         const tip = hand.landmarks[LM.INDEX_TIP];
-        this.actions.point(this.pointX.push(1 - tip.x), this.pointY.push(tip.y));
-        if (res.fired) this.actions.pinchSelected();
+        const mx = this.pointX.push(1 - tip.x);
+        const my = this.pointY.push(tip.y);
+        this.actions.point(mx, my);
+        if (res.fired) {
+          // In measurement mode a pinch places a point rather than extracting,
+          // so one gesture never triggers both (§15 conflict prevention).
+          if (this.actions.measureAt) this.actions.measureAt(mx, my);
+          this.actions.pinchSelected();
+        }
 
         // PINCH + MOVE (§7): while a component is isolated, holding the pinch
         // and moving the hand drags that component. The pinch itself already

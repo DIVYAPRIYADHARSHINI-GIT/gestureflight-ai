@@ -140,6 +140,115 @@ full manual control set stays active, so the aircraft explorer remains usable.
 
 ---
 
+## Engineering simulator features
+
+### Interaction state machine (§15)
+
+Gesture conflicts are prevented **structurally**, not by scattered guards.
+Every action must be admitted by an explicit state machine with ten states
+(`IDLE`, `AIRCRAFT_EXPLODE`, `AIRCRAFT_ASSEMBLE`, `AIRCRAFT_CONTROL`,
+`COMPONENT_SELECT`, `COMPONENT_EXTRACT`, `COMPONENT_INSPECT`,
+`MULTI_PART_SELECT`, `X_RAY`, `MEASUREMENT`). The brief’s specific conflict
+cases are enforced and asserted:
+
+| Must not happen | How it is prevented |
+| --- | --- |
+| Pointing extracts a component | `AIRCRAFT_EXPLODE` admits neither `pointSelect` nor `extract` — you cannot pick a moving target |
+| Closed fist moves the aircraft | `AIRCRAFT_CONTROL` excludes `moveComponent`, `extract` and `pointSelect` |
+| One pinch extracts repeatedly | `tryAction("extract", 400)` enforces a per-action cooldown |
+| Pinch both measures and extracts | In measurement mode the pinch places a point and returns |
+| Wrist roll rolls the aircraft *and* spins a part | Flight control owns hand motion only in `AIRCRAFT_CONTROL`; the camera owns it otherwise |
+
+A momentary tracking dropout never discards work: `relax()` returns transient
+states to `IDLE` but leaves `COMPONENT_EXTRACT`, `COMPONENT_INSPECT`,
+`MEASUREMENT`, `MULTI_PART_SELECT` and `X_RAY` intact.
+
+### Flight controls — half-closed hand (§4C)
+
+Moving a loose hand flies the **aircraft**, not the camera: horizontal → yaw,
+vertical → pitch (hand up = nose up), wrist twist → roll. Hand movement maps to
+*rate of change*, so the model holds its attitude when your hand stops instead
+of snapping back. Motion is critically damped, pitch and roll are bounded so the
+model can never tumble out of view, and a live `Y / P / R` degree readout
+appears on the HUD. Keyboard fallback: `W`/`S` pitch, `A`/`D` yaw, `Q`/`E` roll.
+
+### X-Ray and internal view (§7)
+
+**Non-destructive by construction.** Original materials are stashed in a
+`WeakMap` and restored verbatim on disable — the uploaded model is never
+permanently modified.
+
+Shell-vs-internal classification is **purely geometric**, so it works on any
+uploaded model without relying on invented names: parts are ranked by how much
+of the model’s longest dimension they span, and a part that both encloses the
+model centre and spans most of its length is treated as an outer shell.
+
+> On the built-in airliner this correctly identifies the **fuselage** as the
+> single shell, revealing the other 12 components inside it.
+
+If a model has no separate internal geometry, X-Ray says so plainly rather than
+fabricating an interior. Transparency is adjustable from 2–95%, individual
+components can be forced opaque, and **Reset Appearance** restores everything.
+
+### Multi-part manipulation (§8)
+
+A single `PartManager` registry backs built-in components, engine assemblies
+**and** imported CAD objects, so every feature works identically across all
+three. Each part records its transform at registration, which is what makes
+“restore to the exact original position” reliable after any amount of dragging.
+
+- Select All / Deselect All / Extract Selected / Restore Selected
+- Shift-click to add to the selection with the mouse; repeated point+pinch with gestures
+- **Unselected components are never moved** — asserted in both suites
+- Extraction direction is computed outward from the model centre, per part
+
+Because the exploded view and manual manipulation both write transforms, parts
+under manual control are handed over via an **ownership flag** so the two
+systems can never fight over the same object frame-by-frame.
+
+### 360° inspection (§6)
+
+Extracted parts rotate on both axes via a loose hand or the on-screen D-pad,
+with a **Reset pose** that restores the home rotation while preserving the
+part’s extracted position.
+
+### Measurement tools (§10)
+
+Distances come from **world-space geometry obtained by raycasting**, never from
+screen pixels. The viewer’s uniform framing scale is divided back out, so
+figures are reported in the file’s own units.
+
+- Click (or point + pinch) two surface points → live distance with an on-model line
+- mm / cm / m with verified-consistent conversion (mm = 10×cm = 1000×m)
+- Per-component bounding box: length, height, width, diagonal
+- Centre-to-centre distance **and** shortest gap between two components
+
+> **Scale honesty.** When a format does not record real-world units, the panel
+> warns that measurements are in the file’s own units treated as millimetres and
+> should be read as relative, not certified, dimensions.
+
+### Undo / redo (§11)
+
+Snapshot-based rather than command-based: each entry captures the position,
+rotation, scale and visibility of **every** tracked part plus the app flags
+(explode amount, X-Ray state and opacity, selection, hidden parts, measurement
+points). That is what guarantees an exact restore after a gesture drag that
+produced hundreds of intermediate frames.
+
+- `Ctrl/Cmd + Z` undo, `Ctrl/Cmd + Shift + Z` (or `Ctrl + Y`) redo
+- Continuous drags **coalesce into one undo step** — 40 drag frames = 1 entry
+- Duplicate states are rejected; a new action clears the stale redo branch
+- Undo/redo never records itself, so there is no feedback loop
+- Works identically for gesture-driven and mouse-driven actions
+
+### Bottom control panel (§14)
+
+Nine controls — Explode, Assemble, Flight, Extract, Select, X-Ray, Undo, Redo,
+Reset — each dispatching through the **same** code path as its gesture, so the
+two can never disagree. Buttons pulse when the matching gesture fires. Undo and
+Redo disable themselves and show the action they would reverse. **No button is a
+placeholder** (§20).
+
 ## Hand-only recognition architecture
 
 Gestures are driven by **MediaPipe Hand Landmarker only** — 21 landmarks per
@@ -498,8 +607,8 @@ This application is privacy-first by construction, not by policy.
 
 ```bash
 npm run typecheck   # TypeScript, zero errors
-npm run test:unit   # 146 unit tests (Node, no browser)
-npm run test:e2e    # 322 E2E checks in real headless Chrome
+npm run test:unit   # 201 unit tests (Node, no browser)
+npm run test:e2e    # 378 E2E checks in real headless Chrome
 npm test            # all of the above
 npm run test:live   # run the E2E suites against the deployed URL
 ```
@@ -512,10 +621,11 @@ npm run test:live   # run the E2E suites against the deployed URL
 | `tests/geometry.test.ts` | 28 | ✅ pass |
 | `tests/upgrade.test.ts` | 47 | ✅ pass |
 | `tests/formats.test.ts` | 29 | ✅ pass |
-| `tests/e2e.mjs` | 110 | ✅ pass |
-| `tests/e2e-upgrade.mjs` | 212 | ✅ pass |
+| `tests/simulator.test.ts` | 55 | ✅ pass |
+| `tests/e2e.mjs` | 111 | ✅ pass |
+| `tests/e2e-upgrade.mjs` | 267 | ✅ pass |
 | `tsc --noEmit` | — | ✅ clean |
-| **Total** | **468** | **✅ all passing** |
+| **Total** | **579** | **✅ all passing** |
 
 ### Format test results (real files, real parsers)
 
@@ -590,6 +700,28 @@ as a downsampled luminance silhouette from top, side and front for all four
 aircraft, confirming the airliner's swept planform and upswept tail, the
 fighter's 42° delta and twin canted fins, the freighter's wide boxy high-wing
 body, and the business jet's T-tail. Screenshots are in `docs/screenshots/`.
+
+### Bugs the simulator suites caught and fixed
+
+12. **The exploded view and manual manipulation fought over transforms.**
+    `ExplodedViewController.apply()` rewrote every component position each
+    frame, silently undoing any part the user had extracted or rotated — so
+    “Extract Selected” appeared to do nothing. Fixed with an explicit ownership
+    flag: a part under manual control is skipped by the exploded view until it
+    is restored.
+13. **X-Ray could not be reached from the panel.** `IDLE` did not admit
+    `extract`, so selecting a component from the component list and pressing
+    Extract was rejected by the state machine — selection via mouse or list
+    never passes through a gesture state. `IDLE` now admits manipulation of an
+    already-selected part.
+14. **X-Ray shell classification was wrong on real aircraft.** A volume-fraction
+    threshold rated the long, thin fuselage at 3% of the bounding-box volume, so
+    *zero* shells were detected and X-Ray did nothing visible. Diagnosed by
+    dumping per-part volume and centre-containment, then rewritten to rank by
+    span along the model’s longest axis — which correctly picks the fuselage.
+15. **X-Ray and selection highlighting overwrote each other’s materials.** Both
+    swap `mesh.material`; whichever restored last won. They now share a single
+    `__baseMat` record of the true original.
 
 ### Bugs the universal-CAD suites caught and fixed
 

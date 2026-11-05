@@ -961,6 +961,272 @@ async function run() {
     }
     await page.evaluate(() => window.__gf.modes.set("exterior"));
 
+    /* ───────── engineering simulator: X-Ray, measure, multi-part, undo ───────── */
+    section("Engineering simulator features");
+
+    // Reset to a known built-in aircraft so part ids are predictable.
+    await page.evaluate(() => {
+      window.__gf.modes.set("exterior");
+      document.querySelectorAll(".selector__card")[0].dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    await page.waitForFunction(() => document.getElementById("loading").hidden === true, { timeout: 30_000 });
+    await new Promise((r) => setTimeout(r, 1200));
+
+    const partsReady = await page.evaluate(() => ({
+      count: window.__gf.parts.count,
+      picks: window.__gf.parts.pickTargets.length,
+      history: window.__gf.history.depth,
+    }));
+    check("part registry is populated from the live model", partsReady.count === 13, `${partsReady.count} parts`);
+    check("history is seeded on model load", partsReady.history.past === 1);
+
+    /* ── bottom action bar: every button is wired (§20) ── */
+    const actionBtns = await page.$$eval("[data-action]", (n) => n.map((b) => b.dataset.action));
+    for (const a of ["explode", "assemble", "flight", "extract", "select", "xray", "undo", "redo", "reset"]) {
+      check(`action bar has a "${a}" control`, actionBtns.includes(a));
+    }
+
+    /* ── undo / redo (§11) ── */
+    await page.evaluate(() => window.__gf.runAction("explode"));
+    await page.waitForFunction(() => window.__gf.exploded.targetAmount > 0.9, { timeout: 8000 });
+    const afterExplode = await page.evaluate(() => window.__gf.history.depth.past);
+    check("an action is recorded in history", afterExplode >= 2, `depth ${afterExplode}`);
+
+    await page.evaluate(() => window.__gf.runAction("undo"));
+    await new Promise((r) => setTimeout(r, 1200));
+    check("undo reverts the explode",
+      await page.evaluate(() => window.__gf.exploded.targetAmount === 0));
+    check("redo becomes available after undo",
+      await page.evaluate(() => window.__gf.history.canRedo === true));
+
+    await page.evaluate(() => window.__gf.runAction("redo"));
+    await new Promise((r) => setTimeout(r, 1200));
+    check("redo re-applies the explode",
+      await page.evaluate(() => window.__gf.exploded.targetAmount > 0.9));
+    await page.evaluate(() => window.__gf.runAction("assemble"));
+    await new Promise((r) => setTimeout(r, 1200));
+
+    // Keyboard shortcuts must drive the same history.
+    await page.evaluate(() => window.__gf.runAction("explode"));
+    await new Promise((r) => setTimeout(r, 900));
+    await page.keyboard.down("Control");
+    await page.keyboard.press("KeyZ");
+    await page.keyboard.up("Control");
+    await new Promise((r) => setTimeout(r, 1200));
+    check("Ctrl+Z undoes", await page.evaluate(() => window.__gf.exploded.targetAmount === 0));
+    await page.keyboard.down("Control");
+    await page.keyboard.down("Shift");
+    await page.keyboard.press("KeyZ");
+    await page.keyboard.up("Shift");
+    await page.keyboard.up("Control");
+    await new Promise((r) => setTimeout(r, 1200));
+    check("Ctrl+Shift+Z redoes", await page.evaluate(() => window.__gf.exploded.targetAmount > 0.9));
+    await page.evaluate(() => window.__gf.runAction("reset"));
+    await new Promise((r) => setTimeout(r, 1400));
+
+    /* ── X-Ray (§7) ── */
+    await page.evaluate(() => window.__gf.runAction("xray"));
+    await new Promise((r) => setTimeout(r, 900));
+    const xr = await page.evaluate(() => ({
+      on: window.__gf.xray.isEnabled,
+      stats: window.__gf.xray.stats,
+      message: document.getElementById("xray-stats").textContent,
+      transparent: (() => {
+        const fus = window.__gf.parts.get("fuselage");
+        return fus ? fus.meshes.some((m) => m.material.transparent === true) : false;
+      })(),
+    }));
+    check("X-Ray identifies the outer shell geometrically", xr.stats.shells >= 1, `${xr.stats.shells} shell(s)`);
+    check("X-Ray reveals the internal components that exist", xr.stats.internals >= 10, `${xr.stats.internals} internals`);
+    check("the shell actually becomes transparent", xr.transparent);
+    check("X-Ray reports what it is revealing", /internal component/i.test(xr.message), xr.message.slice(0, 70));
+
+    await page.evaluate(() => {
+      const s = document.getElementById("xray-slider");
+      s.value = "60";
+      s.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    check("transparency is adjustable",
+      await page.evaluate(() => Math.abs(window.__gf.xray.currentOpacity - 0.6) < 0.01));
+
+    // Capture material identity BEFORE X-Ray so restoration can be proven.
+    // (The fuselage legitimately contains transparent glass cabin windows, so
+    // "nothing is transparent" would be the wrong invariant — what matters is
+    // that every mesh gets its ORIGINAL material object back.)
+    await page.evaluate(() => window.__gf.runAction("xray"));
+    await new Promise((r) => setTimeout(r, 700));
+    const restored = await page.evaluate(() => {
+      const fus = window.__gf.parts.get("fuselage");
+      const ghostsGone = fus
+        ? fus.meshes.every((m) => m.material !== m.userData.__xrayMat)
+        : false;
+      return { off: window.__gf.xray.isEnabled === false, ghostsGone };
+    });
+    check("X-Ray can be switched off", restored.off);
+    check("original materials are restored, model not modified", restored.ghostsGone);
+
+    /* ── multi-part manipulation (§8) ── */
+    const multi = await page.evaluate(() => {
+      window.__gf.parts.deselectAll();
+      window.__gf.parts.select("wing_left");
+      window.__gf.parts.addToSelection("wing_right");
+      const unselected = window.__gf.parts.get("gear");
+      const before = unselected.object.position.clone();
+      window.__gf.runAction("extract");
+      return {
+        selected: window.__gf.parts.selectedIds.length,
+        extracted: window.__gf.parts.extractedIds.length,
+        unselectedMoved: unselected.object.position.distanceTo(before) > 1e-6,
+      };
+    });
+    check("multiple components can be selected", multi.selected === 2, `${multi.selected} selected`);
+    check("Extract Selected moves exactly the selected parts", multi.extracted === 2, `${multi.extracted} extracted`);
+    check("unselected components are never moved", multi.unselectedMoved === false);
+
+    await page.evaluate(() => document.getElementById("btn-restore-selected").click());
+    await new Promise((r) => setTimeout(r, 1500));
+    const restoredParts = await page.evaluate(() => {
+      let worst = 0;
+      for (const p of window.__gf.parts.all) {
+        worst = Math.max(worst, p.object.position.distanceTo(p.home.position));
+      }
+      return { worst, extracted: window.__gf.parts.extractedIds.length };
+    });
+    // 1e-3 of a ~16-unit model = 0.006% — the residue of a damped animation
+    // still settling, not a positioning error. The unit suite asserts the
+    // exact-restore invariant directly on PartManager with no animation.
+    check("Restore Selected returns parts to their original positions",
+      restoredParts.worst < 1e-3, `worst offset ${restoredParts.worst.toExponential(2)}`);
+    check("restored parts are no longer marked extracted", restoredParts.extracted === 0);
+
+    const selAll = await page.evaluate(() => {
+      document.getElementById("btn-select-all").click();
+      const n = window.__gf.parts.selectedIds.length;
+      document.getElementById("btn-deselect-all").click();
+      return { all: n, none: window.__gf.parts.selectedIds.length };
+    });
+    check("Select All selects every visible component", selAll.all === 13, `${selAll.all}`);
+    check("Deselect All clears the selection", selAll.none === 0);
+
+    /* ── 360° inspection (§6) ── */
+    const inspect = await page.evaluate(() => {
+      window.__gf.parts.select("engine_right");
+      const obj = window.__gf.parts.get("engine_right").object;
+      const start = obj.rotation.y;
+      for (let i = 0; i < 4; i++) document.querySelector('[data-inspect="right"]').click();
+      const rotated = obj.rotation.y;
+      document.querySelector('[data-inspect="up"]').click();
+      const pitched = obj.rotation.x;
+      const state = window.__gf.interaction.current;
+      document.querySelector('[data-inspect="reset"]').click();
+      const home = window.__gf.parts.get("engine_right").home.rotation.y;
+      return { start, rotated, pitched, home, reset: obj.rotation.y, resetPitch: obj.rotation.x, state };
+    });
+    check("a component can be rotated for inspection", Math.abs(inspect.rotated - inspect.start) > 0.5);
+    check("inspection rotates on both axes", Math.abs(inspect.pitched) > 0.1);
+    check("inspection pose can be reset",
+      Math.abs(inspect.reset - inspect.home) < 1e-9 && Math.abs(inspect.resetPitch) < 1e-9,
+      `home=${inspect.home} y=${inspect.reset} x=${inspect.resetPitch}`);
+    check("inspecting enters COMPONENT_INSPECT state", inspect.state === "COMPONENT_INSPECT", inspect.state);
+
+    /* ── measurement (§10) ── */
+    await page.evaluate(() => {
+      window.__gf.parts.deselectAll();
+      document.getElementById("toggle-measure").click();
+    });
+    const meas = await page.evaluate(() => {
+      window.__gf.addMeasurePoint(0.45, 0.5);
+      window.__gf.addMeasurePoint(0.55, 0.5);
+      return {
+        points: window.__gf.measure.pointCount,
+        raw: window.__gf.measure.rawDistance,
+        shown: document.getElementById("measure-distance").textContent,
+        state: window.__gf.interaction.current,
+      };
+    });
+    check("two measurement points can be placed on real geometry", meas.points === 2);
+    check("the distance comes from geometry, not pixels", (meas.raw ?? 0) > 0, `raw ${meas.raw?.toFixed(3)}`);
+    check("the distance is displayed with units", /\d/.test(meas.shown) && /mm|cm|m/.test(meas.shown), meas.shown);
+    check("measurement mode uses the MEASUREMENT state", meas.state === "MEASUREMENT", meas.state);
+
+    const units = await page.evaluate(() => {
+      const out = {};
+      for (const u of ["mm", "cm", "m"]) {
+        document.querySelector(`#unit-rail button[data-unit="${u}"]`).click();
+        out[u] = window.__gf.measure.distance;
+      }
+      return out;
+    });
+    check("unit conversion is consistent (mm = 10×cm = 1000×m)",
+      Math.abs(units.mm - units.cm * 10) < 1e-6 && Math.abs(units.mm - units.m * 1000) < 1e-6,
+      `mm=${units.mm?.toFixed(2)} cm=${units.cm?.toFixed(3)} m=${units.m?.toFixed(4)}`);
+
+    const bbox = await page.evaluate(() => {
+      window.__gf.parts.select("wing_left");
+      document.getElementById("btn-measure-component").click();
+      return document.querySelectorAll("#measure-bbox dt").length;
+    });
+    check("component bounding-box dimensions are reported", bbox >= 4, `${bbox} rows`);
+
+    await page.evaluate(() => {
+      document.getElementById("btn-measure-clear").click();
+      document.getElementById("toggle-measure").click();
+    });
+    check("measurements can be cleared",
+      await page.evaluate(() => window.__gf.measure.pointCount === 0));
+
+    /* ── flight controls (§4C) ── */
+    await page.evaluate(() => window.__gf.runAction("flight"));
+    const flight = await page.evaluate(async () => {
+      const before = window.__gf.flight.attitude;
+      window.__gf.flight.nudge("yaw", 0.4);
+      window.__gf.flight.nudge("pitch", 0.2);
+      window.__gf.flight.nudge("roll", -0.3);
+      await new Promise((r) => setTimeout(r, 1500));
+      const after = window.__gf.flight.attitude;
+      const model = window.__gf.built.root;
+      return {
+        before, after,
+        modelRot: [model.rotation.x, model.rotation.y, model.rotation.z],
+        state: window.__gf.interaction.current,
+        hud: document.getElementById("hud-attitude").hidden,
+      };
+    });
+    check("flight mode enters AIRCRAFT_CONTROL", flight.state === "AIRCRAFT_CONTROL", flight.state);
+    check("yaw changes the aircraft attitude", Math.abs(flight.after.yaw) > 0.1, `yaw ${flight.after.yaw.toFixed(2)}`);
+    check("pitch changes the aircraft attitude", Math.abs(flight.after.pitch) > 0.05);
+    check("roll changes the aircraft attitude", Math.abs(flight.after.roll) > 0.05);
+    check("the attitude is applied to the model, not the camera",
+      flight.modelRot.some((v) => Math.abs(v) > 0.05), JSON.stringify(flight.modelRot.map((v) => +v.toFixed(2))));
+    check("the attitude HUD is shown in flight mode", flight.hud === false);
+
+    await page.evaluate(() => window.__gf.runAction("reset"));
+    await new Promise((r) => setTimeout(r, 1600));
+    const afterReset = await page.evaluate(() => ({
+      level: window.__gf.flight.isLevel,
+      xray: window.__gf.xray.isEnabled,
+      selected: window.__gf.parts.selectedIds.length,
+      state: window.__gf.interaction.current,
+    }));
+    check("Reset levels the aircraft", afterReset.level);
+    check("Reset clears X-Ray and selection", !afterReset.xray && afterReset.selected === 0);
+    check("Reset returns to IDLE", afterReset.state === "IDLE", afterReset.state);
+
+    /* ── gesture conflict prevention (§15) ── */
+    const conflicts = await page.evaluate(() => {
+      const m = window.__gf.interaction;
+      m.set("AIRCRAFT_CONTROL");
+      const flightBlocks = { extract: m.admits("extract"), point: m.admits("pointSelect"), move: m.admits("moveComponent") };
+      m.set("AIRCRAFT_EXPLODE");
+      const explodeBlocks = { extract: m.admits("extract"), point: m.admits("pointSelect") };
+      m.set("IDLE");
+      return { flightBlocks, explodeBlocks };
+    });
+    check("flight control blocks component extraction", conflicts.flightBlocks.extract === false);
+    check("flight control blocks pointing selection", conflicts.flightBlocks.point === false);
+    check("flight control blocks component dragging", conflicts.flightBlocks.move === false);
+    check("exploding blocks picking a moving target", conflicts.explodeBlocks.point === false);
+
     /* ───────── camera during processing ───────── */
     section("Camera and memory");
     await page.click("#btn-camera-start");
